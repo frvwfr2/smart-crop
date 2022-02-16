@@ -113,4 +113,5 @@ if __name__ == "__main__":
     ap.add_argument("--roi_file", help="File path to existing ROI file to add to. Not implemented.")
     args = vars(ap.parse_args())
 
-    create_roi_from_video(args["video"])
+    filename = create_roi_from_video(args["video"])
+    print(f"ROI file written to {filename}")

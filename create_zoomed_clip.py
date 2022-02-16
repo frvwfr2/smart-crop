@@ -34,6 +34,17 @@ from roi_selector import create_roi_from_video, roi_selection
 #     cropped_y2 = cropped_y1 + target_height
 #     return (cropped_x1, cropped_y1), (cropped_x2, cropped_y2)
 
+def get_new_momentum(old_speed, new_distance):
+    acceleration = 1
+    # print(old_speed, new_distance)
+    if new_distance > old_speed:
+        # print(old_speed + acceleration)
+        return old_speed - acceleration
+    elif new_distance < old_speed:
+        return old_speed + acceleration
+    else:
+        return max(old_speed - acceleration, 0)
+
 def main(args):
     # if the video argument is None, then we are reading from webcam
     if args.get("video", None) is None:
@@ -61,13 +72,17 @@ def main(args):
     new_center = None
     old_center = None
 
-    # This is in "max percent change per frame"
-    MAX_ZOOM_SPEED = 4
+    speed = 0
 
     DEBUG = args["debug"]
+    if DEBUG:
+        SHOW_DEBUG = True
+    else:
+        SHOW_DEBUG = args["show_debug"]
 
     # Maximum movement speed of the cropped zone per frame.
     MAX_PIXEL_MOVEMENT_X = args["max_camera_movement_x"]
+    # MAX_PIXEL_MOVEMENT_X = 10
     MAX_PIXEL_MOVEMENT_Y = args["max_camera_movement_x"]
 
     # Transparency level
@@ -80,6 +95,7 @@ def main(args):
     INNER_DEADZONE_Y = DEADZONE_Y // 2
     OUTER_BOUND_BUFFER_X = args["outer_bound_buffer_x"]
     OUTER_BOUND_BUFFER_Y = args["outer_bound_buffer_y"]
+
 
     # This value defines if the crop should attempt to keep the video centered on the boxes, or simply stop moving if all the boxes are still inside the crop.
     PREVENT_PAN_WHILE_BOUNDED = False
@@ -99,20 +115,28 @@ def main(args):
     input_w = int(vs.get(cv2.CAP_PROP_FRAME_WIDTH ))
     input_h = int(vs.get(cv2.CAP_PROP_FRAME_HEIGHT ))
     frames_count = int(vs.get(cv2.CAP_PROP_FRAME_COUNT))
+    # This value is what the video CLAIMS it is. It is not necessarily the truth.
     fps = vs.get(cv2.CAP_PROP_FPS)
     result = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
                              "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", 
                              args["video"]],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT)
-    duration = float(result.stdout.splitlines()[-1])
-    fps = frames_count / duration
+    duration = "DISABLED"
+    try:
+        duration = float(result.stdout.splitlines()[-1])
+        # This causes major issues with concating videos. Need to figure out how to merge video and audio
+        fps = frames_count / duration
+    except ValueError:
+        print("Assigned default fps of 30")
+        fps = 30
 
-    print(f"Frames: {frames_count} FPS: {fps} Duration: {duration}")
+    print(f"Frames: {frames_count} FPS: {fps} Duration: {duration}s")
     print(f"Inputs: {input_w}x{input_h} @ {fps} fps")
 
     mask = None
 
+    # Returns the mask and the ROI corners
     def parse_roi_file(roi_filepath, frame):
         frame = frame.copy()
         canny_mask = np.zeros(frame.shape, dtype=np.uint8)
@@ -165,6 +189,10 @@ def main(args):
     # TODO
     # Have the zoom-pieces use the shrunken frame (raw_input // 4), but the output video use raw_input // 2 for the zoom factor. Make these factors codeable?
     if WRITE_VIDEO:
+        # If the file already exists, and we are NOT overwriting existing
+        if os.path.exists(args["output_filename"]) and not args["overwrite_existing"]:
+            print("File already exists, and command line arg '--overwrite_existing' is not specified.")
+            return 1
         if args.get("output_filename", None):
             cropped_recording = cv2.VideoWriter(args["output_filename"], cv2.VideoWriter_fourcc(*'MP4V'), fps, (OUTPUT_SIZE[0], OUTPUT_SIZE[1]))
         else:
@@ -184,7 +212,8 @@ def main(args):
         if DEBUG:
             print(f"{datetime.datetime.now()} / Starting New Frame")
         else:
-            print(f"\r{total_count:08d} frames / {int(total_count // fps):04d} seconds", end='')
+            pass
+            # print(f"\r{total_count:08d} frames / {int(total_count // fps):04d} seconds", end='')
         args["skip_starting_frames"] = 0
         # grab the current frame and initialize the occupied/unoccupied
         # text
@@ -230,8 +259,6 @@ def main(args):
             # Create our pure green mask
             green = np.ones(frame.shape, dtype=np.float)*(0,1,0) # .04 secs
         
-            
-
         canny = frame.copy()
         canny = cv2.Canny(canny, 240, 250)
         # print(frame)
@@ -240,8 +267,6 @@ def main(args):
         canny = cv2.bitwise_and(canny, bw_mask)
 
         # Dilate the image to fill in gaps, then find contours
-
-
         def find_dilated_canny_contours(canny):
             thresh = cv2.dilate(canny, None, iterations=1)
             cnts = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -259,6 +284,8 @@ def main(args):
                 # cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
                 min_x, max_x = min(x, min_x), max(x+w, max_x)
                 min_y, max_y = min(y, min_y), max(y+h, max_y)
+            if min_x == input_w and max_x == 0 and min_y == input_h and max_y == 0:
+                return None, None, None, None, thresh
             return min_x, max_x, min_y, max_y, thresh
 
         canny_min_x, canny_max_x, canny_min_y, canny_max_y, thresh = find_dilated_canny_contours(canny)
@@ -324,22 +351,23 @@ def main(args):
         # if the first frame is None, initialize it. Also, every 50 frames, reset the comparison image
         # We need to do a tick-tock - instead of starting fresh each time, use a frame from 1s prior
 
-        # Reset the min/max values
-        x_min = None
-        y_min = None
-        x_max = None
-        y_max = None
+        # Reset the min/max values IF we detected a new location
+        if canny_min_x is not None:
+            x_min = None
+            y_min = None
+            x_max = None
+            y_max = None
 
         if DEBUG:
             print(f"{datetime.datetime.now()} / Starting to locate camera-center processing")
         # If we didn't find any Canny Edges, re-use values from prior
         if not canny_min_x or total_count % FRAMES_BETWEEN_RE_COMPARE != 0:
-            print("REUSING OLD CENTER")
+            # print("REUSING OLD CENTER")
             # print("NO Canny Edges found")
             # If we had previous values to use, then produce an object from those
             if center_x and center_y:
-                # Draw a red center-dot where the center of the edges are
-                cv2.rectangle(frame, (center_x-1, center_y-1), (center_x+1, center_y+1), (0, 0, 255), 2)
+                # Draw a green center-dot where the center of the edges are. This matches the Green Box that defines this point
+                cv2.rectangle(frame, (center_x-1, center_y-1), (center_x+1, center_y+1), (0, 255, 0), 2)
                 # Draw a blue box showing the cropped section
                 cv2.rectangle(frame, (top_x, top_y), (top_x + input_w//ZOOM_FACTOR, top_y + input_h//ZOOM_FACTOR), (255, 0, 0), 2)
                 frame = cv2.putText(frame, 'Cropped frame', (top_x, top_y-5), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,0,0), 2)
@@ -347,7 +375,7 @@ def main(args):
             # If we did not have previous values to use, write out the full frame. This should only ever occur on the very first frame(s).
             else:
                 print("WRITING BAD OUTPUT")
-                raise ValueError("No canny edges detected in frame, and no center yet produced")
+                # raise ValueError("No canny edges detected in frame, and no center yet produced")
                 frame = cv2.resize(frame, (OUTPUT_SIZE[0], OUTPUT_SIZE[1]))
                 # Write the current image to the video file
                 if WRITE_VIDEO:
@@ -411,11 +439,13 @@ def main(args):
             # print(new_center, OUTPUT_SIZE, OUTER_BOUND_BUFFER_X, OUTER_BOUND_BUFFER_Y)
             # print(left_buffer, right_buffer, top_buffer, bottom_buffer)
             # Check if we are already staying in place
-            if new_center != old_center:
-                # If x_values are between the buffers, then don't move
-                if x_min > left_buffer and x_max < right_buffer:
-                    # print("X between buffers, not moving")
-                    new_center[0] = old_center[0]
+            # Currently DISABLED for testing.
+            if False:
+                if new_center != old_center:
+                    # If x_values are between the buffers, then don't move
+                    if x_min > left_buffer and x_max < right_buffer:
+                        # print("X between buffers, not moving")
+                        new_center[0] = old_center[0]
             # To calculate Zoom, we want to get x_max - x_min. If that value is larger than our Crop target, then we need to zoom out some.
 
             # cropped = cv2.putText(cropped, FILENAME, (5, OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_SIMPLEX, .5, (0, 0, 0), 3)
@@ -426,11 +456,21 @@ def main(args):
 
             # 3) Are we moving? Okay, only move _this_ quickly
             # compare old X to new X
+
+            # print(old_center, new_center)
+            # speed = get_new_momentum(speed, old_center[0] - new_center[0])
+            # if speed > MAX_PIXEL_MOVEMENT_X:
+            #     speed = MAX_PIXEL_MOVEMENT_X
+            # print(speed)
+
             if abs(old_center[0] - new_center[0]) > MAX_PIXEL_MOVEMENT_X:
+                # If we are moving to the left, set the new center LEFT by speed
                 if old_center[0] > new_center[0]:
                     new_center[0] = old_center[0] - MAX_PIXEL_MOVEMENT_X
+                # Otherwise, set the new center RIGHT by speed
                 else:
                     new_center[0] = old_center[0] + MAX_PIXEL_MOVEMENT_X
+
             # compare old Y to new Y
             if abs(old_center[1] - new_center[1]) > MAX_PIXEL_MOVEMENT_Y:
                 if old_center[1] > new_center[1]:
@@ -460,7 +500,7 @@ def main(args):
                 # If all the bounds are still inside our box, don't move at all
 
         # Once we have determined a target point, begin to show the preview and write to a file
-        if smooth_top_x is not None:
+        if True: # smooth_top_x is not None:
 
             # Draw a smoothed-pan center point
             # THIS VALUE IS CORRECT
@@ -475,6 +515,7 @@ def main(args):
             # new_center is ACCURATE, for the preview image.
             ######
 
+            # This code is an attempt to "zoom out" to capture all objects - but it doesn't work well
             crop_width = 2*(x_max - x_min)
             crop_height = 2*(y_max - y_min)
             if True: # or crop_width < OUTPUT_SIZE[0]:
@@ -482,9 +523,13 @@ def main(args):
                 crop_height = OUTPUT_SIZE[1]
             else:
                 crop_height = crop_width * 9 // 16
+
+            # 4) Adjust based on the offset_x and offset_y arguments
+            new_center[0] += args["offset_x"]
+            new_center[1] += args["offset_y"]
             # OUTPUT_SIZE 0 and 1 should be replaced with the new value of "zoom_target width and height"
             # tl, br = find_center_within_bounds(new_center[0], new_center[1], max(x_max - x_min, OUTPUT_SIZE[0]), max(y_max - y_min, OUTPUT_SIZE[1]), INPUT_SIZE[0], INPUT_SIZE[1])
-            # Ensure we aren't off the screen to the left
+            # 5) Ensure we aren't off the screen to the left
             cropped_x1 = max((ANALYZE_SHRINK_FACTOR * new_center[0]) - crop_width // 2, 0)
             # Ensure we aren't off the screen to the right
             cropped_x1 = min((cropped_x1, input_w - crop_width))
@@ -518,32 +563,35 @@ def main(args):
             # cropped_y2 needs to be larger, towards the 4k bound (2160?) INPUT_WIDTH[1]
             # And then resize it to OUTPUT_SIZE[0]
             # A linear scaling. We might want to make this do a quicker zoom initially, and then slow down as it approaches. Log-scale?
-            if total_count > 0 and total_count < ZOOM_IN_DURATION_FRAMES:
-                percent_to_edge = 1 - (total_count / ZOOM_IN_DURATION_FRAMES)
+            if ZOOM_IN_DURATION_FRAMES == -1 or (total_count > 0 and total_count < ZOOM_IN_DURATION_FRAMES):
+                percent_from_edge = 1 - (total_count / ZOOM_IN_DURATION_FRAMES)
+                if ZOOM_IN_DURATION_FRAMES == -1:
+                    percent_from_edge = 1
                 # print(percent_to_edge)
-                cropped_x1 = int(cropped_x1 - (percent_to_edge * cropped_x1))
-                cropped_y1 = int(cropped_y1 - (percent_to_edge * cropped_y1))
+                cropped_x1 = int(cropped_x1 - (percent_from_edge * cropped_x1))
+                cropped_y1 = int(cropped_y1 - (percent_from_edge * cropped_y1))
 
-                cropped_x2 = int(cropped_x2 + (percent_to_edge * abs(input_w - cropped_x2)))
-                cropped_y2 = int(cropped_y2 + (percent_to_edge * abs(input_h - cropped_y2)))
+                cropped_x2 = int(cropped_x2 + (percent_from_edge * abs(input_w - cropped_x2)))
+                cropped_y2 = int(cropped_y2 + (percent_from_edge * abs(input_h - cropped_y2)))
                 pass
             
-            # print(cropped_x1, cropped_y1, cropped_x2, cropped_y2)
-            # Draw the cropping box in blue
-            cv2.rectangle(frame, (cropped_x1 // ZOOM_FACTOR, cropped_y1 // ZOOM_FACTOR), (cropped_x2 // ZOOM_FACTOR, cropped_y2 // ZOOM_FACTOR), (255, 0, 0), 1)
-            frame = cv2.putText(frame, 'Cropped frame', (cropped_x1 // ZOOM_FACTOR, cropped_y1 // ZOOM_FACTOR - 5), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,0,0), 2)
-            frame = cv2.putText(frame, 'Cropped frame', (cropped_x1 // ZOOM_FACTOR, cropped_y1 // ZOOM_FACTOR - 5), cv2.FONT_HERSHEY_SIMPLEX, .5, (255,0,0), 1)
+            if SHOW_DEBUG:
+                # print(cropped_x1, cropped_y1, cropped_x2, cropped_y2)
+                # Draw the cropping box in blue
+                cv2.rectangle(frame, (cropped_x1 // ZOOM_FACTOR, cropped_y1 // ZOOM_FACTOR), (cropped_x2 // ZOOM_FACTOR, cropped_y2 // ZOOM_FACTOR), (255, 0, 0), 1)
+                frame = cv2.putText(frame, 'Cropped frame', (cropped_x1 // ZOOM_FACTOR, cropped_y1 // ZOOM_FACTOR - 5), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,0,0), 2)
+                frame = cv2.putText(frame, 'Cropped frame', (cropped_x1 // ZOOM_FACTOR, cropped_y1 // ZOOM_FACTOR - 5), cv2.FONT_HERSHEY_SIMPLEX, .5, (255,0,0), 1)
 
             # Cut down the size of the cropped box to what we actually want, rather than the full frame
             cropped = cropped[cropped_y1:cropped_y2, cropped_x1:cropped_x2]
             cropped = cv2.resize(cropped, (OUTPUT_SIZE[0], OUTPUT_SIZE[1]))
 
+            # Write the name of the clip at the top left
+            # Write a black outline, followed by the same text but in white and thinner
+            cropped = cv2.putText(cropped, FILENAME, (5, OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_SIMPLEX, .5, (0, 0, 0), 3)
+            cropped = cv2.putText(cropped, FILENAME, (5, OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 255, 255), 1)
             # if DRAW_SCOREBOARD
             if False:
-                # Write a black outline, followed by the same text but in white and thinner
-                cropped = cv2.putText(cropped, FILENAME, (5, OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_SIMPLEX, .5, (0, 0, 0), 3)
-                cropped = cv2.putText(cropped, FILENAME, (5, OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 255, 255), 1)
-
                 HALF_SCORE_WIDTH = 200
                 SCORE_HEIGHT = 30
                 # Draw black rectangle for Dark score
@@ -576,11 +624,12 @@ def main(args):
             # canny = cv2.Canny(masked_image, 100, 200)
             # cv2.imshow("Canny", canny)
 
-            # Draw the threshold over top of the live frame
-            frame = np.bitwise_or(frame, thresh[:, :, np.newaxis])
+            # if SHOW_DEBUG:
             # Green overlay disabled for now
             if DEBUG:
                 print(f"{datetime.datetime.now()} / Generate green overlay")
+                # Draw the threshold over top of the live frame
+                frame = np.bitwise_or(frame, thresh[:, :, np.newaxis])
                 # We'd rather this be AFTER the overlay, but it's more complex now that the frame is decimal instead of int
                 # Convert our live frame to Float from int. 
                 frame = np.array(frame, dtype=np.float) # .015 secs
@@ -598,25 +647,31 @@ def main(args):
             if DEBUG:
                 print(f"{datetime.datetime.now()} / Draw debug rectangles over everything")
 
-            # Draw the outer buffer box
-            cv2.rectangle(frame, (left_buffer, top_buffer), (right_buffer, bottom_buffer), (255, 255, 255), 1)
-            frame = cv2.putText(frame, 'Outer buffer box', (left_buffer, top_buffer-5), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,0,0), 2)
-            frame = cv2.putText(frame, 'Outer buffer box', (left_buffer, top_buffer-5), cv2.FONT_HERSHEY_SIMPLEX, .5, (255,255,255), 1)
+            if SHOW_DEBUG:
+                # Draw the outer buffer box
+                cv2.rectangle(frame, (left_buffer, top_buffer), (right_buffer, bottom_buffer), (255, 255, 255), 1)
+                frame = cv2.putText(frame, 'Outer buffer box', (left_buffer, top_buffer-5), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,0,0), 2)
+                frame = cv2.putText(frame, 'Outer buffer box', (left_buffer, top_buffer-5), cv2.FONT_HERSHEY_SIMPLEX, .5, (255,255,255), 1)
 
-            # Draw bounds of what the Canny is detecting
-            cv2.rectangle(frame, (canny_min_x, canny_min_y), (canny_max_x, canny_max_y), (0, 255, 0), 1)
-            # Draw the center of our zoom
-            cv2.rectangle(frame, (new_center[0]-1, new_center[1]-1), (new_center[0]+1, new_center[1]+1), (255, 255, 255), 2)
-            # Inner deadzone
-            cv2.rectangle(frame, (new_center[0] - INNER_DEADZONE_X, new_center[1] - INNER_DEADZONE_Y), (new_center[0] + INNER_DEADZONE_X, new_center[1] + INNER_DEADZONE_Y), (255,255,255), 1)
-            # Outer deadzone
-            cv2.rectangle(frame, (new_center[0] - DEADZONE_X, new_center[1] - DEADZONE_Y), (new_center[0] + DEADZONE_X, new_center[1] + DEADZONE_Y), (255,255,255), 1)
-            frame = cv2.putText(frame, "Movement deadzone", (new_center[0] - DEADZONE_X, new_center[1] - DEADZONE_Y - 5), cv2.FONT_HERSHEY_SIMPLEX, .5, (0, 0, 0), 2)
-            frame = cv2.putText(frame, "Movement deadzone", (new_center[0] - DEADZONE_X, new_center[1] - DEADZONE_Y - 5), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 255, 255), 1)
-            # This draws a box showing what the Cropped Image will contain
-            # cv2.rectangle(frame, (smooth_top_x * ANALYZE_SHRINK_FACTOR * ZOOM_FACTOR, smooth_top_y * ANALYZE_SHRINK_FACTOR * ZOOM_FACTOR), (smooth_top_x + FORCED_WIDTH//(ZOOM_FACTOR * ANALYZE_SHRINK_FACTOR), smooth_top_y + FORCED_HEIGHT//(ZOOM_FACTOR * ANALYZE_SHRINK_FACTOR)), (255, 255, 255), 2)
-            # Draw a pixel at the center of the in-the-moment edges
-            cv2.rectangle(frame, (center_x-1, center_y-1), (center_x+1, center_y+1), (0, 0, 255), 1)
+                # Draw bounds of what the Canny is detecting
+                cv2.rectangle(frame, (canny_min_x, canny_min_y), (canny_max_x, canny_max_y), (0, 255, 0), 1)
+                # Draw the center of our zoom
+                cv2.rectangle(frame, (new_center[0]-1, new_center[1]-1), (new_center[0]+1, new_center[1]+1), (255, 255, 255), 2)
+                # Inner deadzone
+                cv2.rectangle(frame, (new_center[0] - INNER_DEADZONE_X, new_center[1] - INNER_DEADZONE_Y), (new_center[0] + INNER_DEADZONE_X, new_center[1] + INNER_DEADZONE_Y), (255,255,255), 1)
+                # Outer deadzone
+                cv2.rectangle(frame, (new_center[0] - DEADZONE_X, new_center[1] - DEADZONE_Y), (new_center[0] + DEADZONE_X, new_center[1] + DEADZONE_Y), (255,255,255), 1)
+                frame = cv2.putText(frame, "Movement deadzone", (new_center[0] - DEADZONE_X, new_center[1] - DEADZONE_Y - 5), cv2.FONT_HERSHEY_SIMPLEX, .5, (0, 0, 0), 2)
+                frame = cv2.putText(frame, "Movement deadzone", (new_center[0] - DEADZONE_X, new_center[1] - DEADZONE_Y - 5), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 255, 255), 1)
+                # This draws a box showing what the Cropped Image will contain
+                # cv2.rectangle(frame, (smooth_top_x * ANALYZE_SHRINK_FACTOR * ZOOM_FACTOR, smooth_top_y * ANALYZE_SHRINK_FACTOR * ZOOM_FACTOR), (smooth_top_x + FORCED_WIDTH//(ZOOM_FACTOR * ANALYZE_SHRINK_FACTOR), smooth_top_y + FORCED_HEIGHT//(ZOOM_FACTOR * ANALYZE_SHRINK_FACTOR)), (255, 255, 255), 2)
+                # Draw a pixel at the center of the in-the-moment edges
+                cv2.rectangle(frame, (center_x-1, center_y-1), (center_x+1, center_y+1), (0, 0, 255), 1)
+
+            
+            # 6) De-Adjust for the next loop?
+            new_center[0] -= args["offset_x"]
+            new_center[1] -= args["offset_y"]
 
             # If we want to keep our debug output, write the "live" frame to a debug file
             if DEBUG:
@@ -625,7 +680,8 @@ def main(args):
                 live_recording.write(live_frame)
 
             # This is the "debug" view
-            cv2.imshow("Live", frame)
+            if SHOW_DEBUG:
+                cv2.imshow("Debug", frame)
             # This is our final output, being written to our "good" file
             cv2.imshow("Cropped", cropped)
             # cv2.imshow("ROI Mask", mask)
@@ -650,8 +706,9 @@ def main(args):
     vs.stop() if args.get("video", None) is None else vs.release()
     cv2.destroyAllWindows()
     print(f"Done @ {datetime.datetime.now()}")
+    return 0 
 
-if __name__ == "__main__":
+def run_args(zoom_args):
     ap = argparse.ArgumentParser()
     ap.add_argument("-v", "--video", help="path to the video file")
     ap.add_argument("-a", "--min-area", type=int, default=50, help="minimum area size")
@@ -661,6 +718,8 @@ if __name__ == "__main__":
     ap.add_argument("-m_y", "--max_camera_movement_y", type=int, default=1, help="Max pixels per frame the camera tilts")
     ap.add_argument("-ob_x", "--outer_bound_buffer_x", type=int, default=100, help="Number of pixels from the edge -> crop_outer at which point the camera needs to shift.")
     ap.add_argument("-ob_y", "--outer_bound_buffer_y", type=int, default=100, help="Number of pixels from the edge -> crop_outer at which point the camera needs to shift.")
+    ap.add_argument("--offset_x", type=int, default=0, help="Offset to shift the camera left or right. Negative values for left. Default 0.")
+    ap.add_argument("--offset_y", type=int, default=0, help="Offset to shift the camera up or down. Negative values for up. Default 0.")
     ap.add_argument("--zoomin_duration_frames", type=int, default=600, help="Number of frames to spend zooming in at the beginning of a clip")
     ap.add_argument("--seconds_between_comparisons", type=float, default=.5, help="Number of seconds between each comparison frame")
     # ap.add_argument("--skip_starting_frames", type=int, default=0, help="Skip this many frames at the start of the video. Generally used for testing events further into a clip.")
@@ -668,7 +727,35 @@ if __name__ == "__main__":
     ap.add_argument("-r", "--roi_filepath", default=None, help="File containing ROI info. Generated by roi_selector.py")
     ap.add_argument("-o", "--output_filename", default=None, help="Output video file name")
     ap.add_argument("-w", dest="write", default=False, action='store_true', help="Write output to file")
-    ap.add_argument("-d", dest="debug", default=False, action='store_true', help="Debug output. Also will write the Live frame to a file")
+    ap.add_argument("-d", dest="debug", default=False, action='store_true', help="Debug output. Also will write the Debug frame to a file")
+    ap.add_argument("-o_e", "--overwrite_existing", default=False, action='store_true', help="Flag to enable overwriting existing files. Default is False")
+    ap.add_argument("--show_debug", dest="show_debug", default=False, action='store_true', help="Show live debug output")
+    args = vars(ap.parse_args(zoom_args))
+    print(args)
+    return main(args)
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("-v", "--video", help="path to the video file")
+    ap.add_argument("-a", "--min-area", type=int, default=50, help="minimum area size. Default=50")
+    ap.add_argument("-d_x", "--deadzone_x", type=int, default=80, help="Deadzone where the camera does not pan in x-axis")
+    ap.add_argument("-d_y", "--deadzone_y", type=int, default=60, help="Deadzone where the camera does not pan in y-axis")
+    ap.add_argument("-m_x", "--max_camera_movement_x", type=int, default=3, help="Max pixels per frame the camera pans")
+    ap.add_argument("-m_y", "--max_camera_movement_y", type=int, default=1, help="Max pixels per frame the camera tilts")
+    ap.add_argument("-ob_x", "--outer_bound_buffer_x", type=int, default=100, help="Number of pixels from the edge -> crop_outer at which point the camera needs to shift.")
+    ap.add_argument("-ob_y", "--outer_bound_buffer_y", type=int, default=100, help="Number of pixels from the edge -> crop_outer at which point the camera needs to shift.")
+    ap.add_argument("--offset_x", type=int, default=0, help="Offset to shift the camera left or right. Negative values for left. Default 0.")
+    ap.add_argument("--offset_y", type=int, default=0, help="Offset to shift the camera up or down. Negative values for up. Default 0.")
+    ap.add_argument("--zoomin_duration_frames", type=int, default=600, help="Number of frames to spend zooming in at the beginning of a clip")
+    ap.add_argument("--seconds_between_comparisons", type=float, default=.5, help="Number of seconds between each comparison frame")
+    # ap.add_argument("--skip_starting_frames", type=int, default=0, help="Skip this many frames at the start of the video. Generally used for testing events further into a clip.")
+    ap.add_argument("--disable_filename_overlay", default=False, action='store_true', help="Disable writing the filename in the upper-left corner of a clip")
+    ap.add_argument("-r", "--roi_filepath", default=None, help="File containing ROI info. Generated by roi_selector.py")
+    ap.add_argument("-o", "--output_filename", default=None, help="Output video file name")
+    ap.add_argument("-w", dest="write", default=False, action='store_true', help="Write output to file")
+    ap.add_argument("-d", dest="debug", default=False, action='store_true', help="Debug output. Also will write the Debug frame to a file")
+    ap.add_argument("-o_e", "--overwrite_existing", default=False, action='store_true', help="Flag to enable overwriting existing files. Default is False")
+    ap.add_argument("--show_debug", dest="show_debug", default=False, action='store_true', help="Show live debug output")
     args = vars(ap.parse_args())
 
     main(args)

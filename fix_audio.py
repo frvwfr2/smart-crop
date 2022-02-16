@@ -9,10 +9,12 @@ def fix_audio(video_file, audio_file):
     # directory = r"F:\Media\RawClips\2021-06-19 Practice"
     # audio_file = f"scrimmage_{i:03d}.MP4"
     # video_file = f"scrimmage_{i:03d}.MP4_cropped.mp4"
-    command = f'ffmpeg -i "{audio_file}" -i "{video_file}" -loglevel fatal -hide_banner -c copy -map 1:v:0 -map 0:a:0 -shortest "{video_file}_audio.mp4" -y'
+    output_file = f"{video_file}_audio.mp4"
+    command = f'ffmpeg -i "{audio_file}" -i "{video_file}" -loglevel fatal -hide_banner -c copy -map 1:v:0 -map 0:a:0 -shortest "{output_file}" -y'
 
     print(command)
     subprocess.call(command)
+    return output_file
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
