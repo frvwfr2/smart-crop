@@ -1,0 +1,74 @@
+0:27	
+1:15	# Green score 1-0
+2:20	
+5:25	# Green score 2-0
+6:45
+7:15	# Yellow score 2-1
+8:23
+10:12	# Green score 3-1
+11:26
+14:25	# Yellow score 3-2 (was Mark in?...)
+15:30
+17:47	# Yellow score 3-3
+19:14
+20:16	# Yellow score 3-4
+21:38	--zoomin_duration_frames=200 -o_e # To modify the arguments passed to 
+24:40	# Yellow score 3-5
+26:15
+27:52 	# Yellow score 3-6
+29:10	
+30:52	# Yellow score 3-7
+# TIMEOUT
+35:00
+37:05	# Yellow score 3-8
+38:25	
+40:40	# Timeout yellow
+42:20	# Yellow resumes play
+43:15	# Yellow score 3-9
+# HALFTIME
+46:52	# Green pull
+48:40	# Green score 4-9
+49:45
+51:12	# Yellow score 4-10
+52:30	
+53:12	# Green score 5-10
+54:10	
+55:00	# Green score 6-10
+56:35
+58:30	# Yellow score 6-11
+59:46
+1:00:22	# Green score 7-11
+1:01:53	
+1:03:35	# Green score 8-11
+1:04:30
+1:09:45	# Yellow score 8-12
+1:11:16	
+1:13:16	# Yellow score 8-13
+1:15:17
+1:16:27	# Green score 9-13
+1:17:50	
+1:19:56	# Green score 10-13
+1:21:17	
+1:22:55	# GREEN TIMEOUT
+1:24:56	# TIMEOUT ENDS
+1:26:00	# Green score 11-13
+1:27:23
+1:27:58	# Yellow score 11-14
+1:29:08	
+1:29:35	# Green score 12-14
+1:30:33	
+1:31:48	# Green score 13-14
+1:33:22	
+1:34:31	# Cut for camera modification
+1:34:31 --zoomin_duration_frames=-1 -o_e# Resume for mark's huck. Can't zoom at all or the cutter is hidden, to the left of the frame. Too many people walking onto field
+1:35:15	# Yellow score 13-15. Mark's huck
+1:36:30	
+1:37:35	# Green score 14-15
+1:38:40	
+1:39:30	# Yellow score 14-16
+1:40:36	
+1:43:44	# Green score 15-16
+1:44:56	
+	# 1:46:15 is the final score, Yellow wins 17-15
+1:47:55	# FINALE
+

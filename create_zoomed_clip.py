@@ -14,6 +14,7 @@ import json
 from numpy.core.fromnumeric import size
 from numpy.lib.function_base import append
 from roi_selector import create_roi_from_video, roi_selection
+from parse_teams import Team
 
 # # This takes in a "target center" and outputs the "actual center"
 # def find_center_within_bounds(center_x, center_y, target_width, target_height, max_width, max_height):
@@ -45,6 +46,48 @@ def get_new_momentum(old_speed, new_distance):
     else:
         return max(old_speed - acceleration, 0)
 
+def find_dilated_canny_contours(canny, input_w, input_h):
+    thresh = cv2.dilate(canny, None, iterations=1)
+    cnts = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cnts = imutils.grab_contours(cnts)
+    min_x, max_x = input_w, 0
+    min_y, max_y = input_h, 0
+    for c in cnts:
+        # print(cv2.contourArea(c))
+        # If the area we found was too small, ignore it
+        # thresh = cv2.bitwise_not(thresh, c)
+        if cv2.contourArea(c) < args["min_area"]:
+            continue
+            # print("FOUND AREA TOO SMALL")
+        (x,y,w,h) = cv2.boundingRect(c)
+        # cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        min_x, max_x = min(x, min_x), max(x+w, max_x)
+        min_y, max_y = min(y, min_y), max(y+h, max_y)
+    if min_x == input_w and max_x == 0 and min_y == input_h and max_y == 0:
+        return None, None, None, None, thresh
+    return min_x, max_x, min_y, max_y, thresh
+
+def draw_debug_text(frame):
+    text_y = 15
+    frame = cv2.putText(frame, 'Edge Detection bounds in Green', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,0,0), 2)
+    frame = cv2.putText(frame, 'Edge Detection bounds in Green', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,255,0), 1)
+    text_y += 20
+    frame = cv2.putText(frame, 'Green dot is "Center of target"', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,0,0), 2)
+    frame = cv2.putText(frame, 'Green dot is "Center of target"', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,255,0), 1)
+    text_y += 20
+    frame = cv2.putText(frame, 'White dot is "Current center"', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,0,0), 2)
+    frame = cv2.putText(frame, 'White dot is "Current center"', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (255,255,255), 1)
+    text_y += 20
+    frame = cv2.putText(frame, 'If green dot is within "Movement Deadzone", don\'t move. ', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,0,0), 2)
+    frame = cv2.putText(frame, 'If green dot is within "Movement Deadzone", don\'t move. ', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (255,255,255), 1)
+    text_y += 20
+    frame = cv2.putText(frame, 'If green box is within "Outer buffer box", don\'t move.', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,0,0), 2)
+    frame = cv2.putText(frame, 'If green box is within "Outer buffer box", don\'t move.', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (255,255,255), 1)
+    text_y += 20
+    frame = cv2.putText(frame, 'Else, shift the cropped frame from the white dot towards the green dot.', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,0,0), 2)
+    frame = cv2.putText(frame, 'Else, shift the cropped frame from the white dot towards the green dot.', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (255,255,255), 1)
+
+
 def main(args):
     # if the video argument is None, then we are reading from webcam
     if args.get("video", None) is None:
@@ -57,6 +100,17 @@ def main(args):
     firstFrame = None
     next = None
 
+    team_one = None
+    team_two = None
+
+    if args.get("team_one_file", None) is not None:
+        team_one = Team(args.get("team_one_file"))
+    if args.get("team_one_score", None) is not None:
+        team_one_score = Team(args.get("team_one_score"))
+    if args.get("team_two_file", None) is not None:
+        team_two = Team(args.get("team_two_file"))
+    if args.get("team_two_score", None) is not None:
+        team_two_score = Team(args.get("team_two_score"))
     # Initialize vars
     count = 0
     total_count = 0
@@ -267,28 +321,7 @@ def main(args):
         canny = cv2.bitwise_and(canny, bw_mask)
 
         # Dilate the image to fill in gaps, then find contours
-        def find_dilated_canny_contours(canny):
-            thresh = cv2.dilate(canny, None, iterations=1)
-            cnts = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            cnts = imutils.grab_contours(cnts)
-            min_x, max_x = input_w, 0
-            min_y, max_y = input_h, 0
-            for c in cnts:
-                # print(cv2.contourArea(c))
-                # If the area we found was too small, ignore it
-                # thresh = cv2.bitwise_not(thresh, c)
-                if cv2.contourArea(c) < args["min_area"]:
-                    continue
-                    # print("FOUND AREA TOO SMALL")
-                (x,y,w,h) = cv2.boundingRect(c)
-                # cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-                min_x, max_x = min(x, min_x), max(x+w, max_x)
-                min_y, max_y = min(y, min_y), max(y+h, max_y)
-            if min_x == input_w and max_x == 0 and min_y == input_h and max_y == 0:
-                return None, None, None, None, thresh
-            return min_x, max_x, min_y, max_y, thresh
-
-        canny_min_x, canny_max_x, canny_min_y, canny_max_y, thresh = find_dilated_canny_contours(canny)
+        canny_min_x, canny_max_x, canny_min_y, canny_max_y, thresh = find_dilated_canny_contours(canny, input_w, input_h)
 
         # Draw a line from roi_cones[0] to roi_cones[2]
         # Draws a line on each sideline.
@@ -298,7 +331,7 @@ def main(args):
         # cv2.line(frame, roi_cones[1], roi_cones[3], (255,255,255), 1)
         # cv2.line(frame, )
         # Draw the intermediate lines too
-        # Fisheye effect kills this :( )
+        # Fisheye effect kills this :(
         # for i in range(0, 7+1):
         #     cone_top_x = int(roi_cones[0][0] + (roi_cones[1][0] - roi_cones[0][0]) * i/7)
         #     cone_top_y = int(roi_cones[0][1] + (roi_cones[1][1] - roi_cones[0][1]) * i/7)
@@ -326,24 +359,7 @@ def main(args):
         # print(f"({canny_min_x}, {canny_min_y}) / ({canny_max_x}, {canny_max_y})")
         # frame = cv2.putText(frame, 'Edge Detection bounds in Green', (canny_min_x, canny_min_y-5), cv2.FONT_HERSHEY_SIMPLEX, .5, (255,255,255), 2)
         # frame = cv2.putText(frame, 'Edge Detection bounds in Green', (canny_min_x, canny_min_y-5), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,255,0), 1)
-        text_y = 15
-        frame = cv2.putText(frame, 'Edge Detection bounds in Green', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,0,0), 2)
-        frame = cv2.putText(frame, 'Edge Detection bounds in Green', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,255,0), 1)
-        text_y += 20
-        frame = cv2.putText(frame, 'Green dot is "Center of target"', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,0,0), 2)
-        frame = cv2.putText(frame, 'Green dot is "Center of target"', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,255,0), 1)
-        text_y += 20
-        frame = cv2.putText(frame, 'White dot is "Current center"', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,0,0), 2)
-        frame = cv2.putText(frame, 'White dot is "Current center"', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (255,255,255), 1)
-        text_y += 20
-        frame = cv2.putText(frame, 'If green dot is within "Movement Deadzone", don\'t move. ', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,0,0), 2)
-        frame = cv2.putText(frame, 'If green dot is within "Movement Deadzone", don\'t move. ', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (255,255,255), 1)
-        text_y += 20
-        frame = cv2.putText(frame, 'If green box is within "Outer buffer box", don\'t move.', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,0,0), 2)
-        frame = cv2.putText(frame, 'If green box is within "Outer buffer box", don\'t move.', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (255,255,255), 1)
-        text_y += 20
-        frame = cv2.putText(frame, 'Else, shift the cropped frame from the white dot towards the green dot.', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,0,0), 2)
-        frame = cv2.putText(frame, 'Else, shift the cropped frame from the white dot towards the green dot.', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (255,255,255), 1)
+        frame = draw_debug_text(frame)
         # If green dot is within "Movement Deadzone", don't move. 
         # If green box is within "Outer buffer box", don't move.
         # Else, shift the cropped frame from the white dot towards the green dot.
@@ -575,6 +591,7 @@ def main(args):
                 cropped_y2 = int(cropped_y2 + (percent_from_edge * abs(input_h - cropped_y2)))
                 pass
             
+            # Draws the crop-preview box
             if SHOW_DEBUG:
                 # print(cropped_x1, cropped_y1, cropped_x2, cropped_y2)
                 # Draw the cropping box in blue
@@ -591,17 +608,23 @@ def main(args):
             cropped = cv2.putText(cropped, FILENAME, (5, OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_SIMPLEX, .5, (0, 0, 0), 3)
             cropped = cv2.putText(cropped, FILENAME, (5, OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 255, 255), 1)
             # if DRAW_SCOREBOARD
-            if False:
+            # TODO we should put some format in the Timestamps file to place score 
+            if team_one is not None:
                 HALF_SCORE_WIDTH = 200
                 SCORE_HEIGHT = 30
                 # Draw black rectangle for Dark score
-                cv2.rectangle(cropped, (OUTPUT_SIZE[0]//2 - HALF_SCORE_WIDTH - 1, 0), (OUTPUT_SIZE[0]//2 - 1, SCORE_HEIGHT-2), (0,0,0), -1)
+                # This is the inner-box, filled in
+                cv2.rectangle(cropped, (OUTPUT_SIZE[0]//2 - HALF_SCORE_WIDTH - 1, 0), (OUTPUT_SIZE[0]//2 - 1, SCORE_HEIGHT-2), team_one.bg_color, -1)
+                # This is the outer-box, just a thin line
                 cv2.rectangle(cropped, (OUTPUT_SIZE[0]//2 - HALF_SCORE_WIDTH - 1, 0), (OUTPUT_SIZE[0]//2 - 1, SCORE_HEIGHT-2), (255,255,255), 1)
-                cv2.putText(cropped, "Dark score", (OUTPUT_SIZE[0]//2 - HALF_SCORE_WIDTH + 5, SCORE_HEIGHT-4), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 1)
+                cv2.putText(cropped, team_one.name, (OUTPUT_SIZE[0]//2 - HALF_SCORE_WIDTH + 5, SCORE_HEIGHT-4), cv2.FONT_HERSHEY_SIMPLEX, 1, team_one.font_color, 1)
+            if team_two is not None:
                 # Draw white rectangle for White score
-                cv2.rectangle(cropped,(OUTPUT_SIZE[0]//2 + HALF_SCORE_WIDTH, 0), (OUTPUT_SIZE[0]//2 + 1, SCORE_HEIGHT-2), (255,255,255), -1)
+                # This is the inner-box, filled in
+                cv2.rectangle(cropped,(OUTPUT_SIZE[0]//2 + HALF_SCORE_WIDTH, 0), (OUTPUT_SIZE[0]//2 + 1, SCORE_HEIGHT-2), team_two.bg_color, -1)
+                # This is the outer-box, just a thin line
                 cv2.rectangle(cropped,(OUTPUT_SIZE[0]//2 + HALF_SCORE_WIDTH, 0), (OUTPUT_SIZE[0]//2 + 1, SCORE_HEIGHT-2), (0,0,0), 1)
-                cv2.putText(cropped, "White score", (OUTPUT_SIZE[0]//2 + 5, SCORE_HEIGHT-4), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,0), 1)
+                cv2.putText(cropped, team_two.name, (OUTPUT_SIZE[0]//2 + 5, SCORE_HEIGHT-4), cv2.FONT_HERSHEY_SIMPLEX, 1, team_two.font_color, 1)
             # Write the current image to the video file
             if DEBUG:
                 print(f"{datetime.datetime.now()} / Write frame to disk")
@@ -730,6 +753,10 @@ def run_args(zoom_args):
     ap.add_argument("-d", dest="debug", default=False, action='store_true', help="Debug output. Also will write the Debug frame to a file")
     ap.add_argument("-o_e", "--overwrite_existing", default=False, action='store_true', help="Flag to enable overwriting existing files. Default is False")
     ap.add_argument("--show_debug", dest="show_debug", default=False, action='store_true', help="Show live debug output")
+    ap.add_argument("--team_one_file", help="Path to file consisting of info for Team 1, on the left", type=str, default=None)
+    ap.add_argument("--team_two_file", help="Path to file consisting of info for Team 2, on the right", type=str, default=None)
+    ap.add_argument("--team_one_score", help="Current score for Team 1", type=int, default=None)
+    ap.add_argument("--team_two_score", help="Current score for Team 2", type=int, default=None)
     args = vars(ap.parse_args(zoom_args))
     print(args)
     return main(args)
@@ -756,6 +783,10 @@ if __name__ == "__main__":
     ap.add_argument("-d", dest="debug", default=False, action='store_true', help="Debug output. Also will write the Debug frame to a file")
     ap.add_argument("-o_e", "--overwrite_existing", default=False, action='store_true', help="Flag to enable overwriting existing files. Default is False")
     ap.add_argument("--show_debug", dest="show_debug", default=False, action='store_true', help="Show live debug output")
+    ap.add_argument("--team_one_file", help="Path to file consisting of info for Team 1, on the left", type=str, default=None)
+    ap.add_argument("--team_two_file", help="Path to file consisting of info for Team 2, on the right", type=str, default=None)
+    ap.add_argument("--team_one_score", help="Current score for Team 1", type=int, default=None)
+    ap.add_argument("--team_two_score", help="Current score for Team 2", type=int, default=None)
     args = vars(ap.parse_args())
 
     main(args)
