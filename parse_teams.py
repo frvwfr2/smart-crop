@@ -29,9 +29,11 @@ class Team:
             if (red*255*0.299 + green*255*0.587 + blue*255*0.114) > 149:
                 # Use Black font
                 self.font_color = (0, 0, 0)
+                self.accent_color = (255, 255, 255)
             else:
                 # Use White font
                 self.font_color = (255, 255, 255)
+                self.accent_color = (0, 0, 0)
             print(self.font_color)
 
     def __repr__(self):

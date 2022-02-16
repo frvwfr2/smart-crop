@@ -1,5 +1,5 @@
-Red
-white
+Red15
+darkred
 Stephen
 Tobias
 Owen

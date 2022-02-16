@@ -101,16 +101,18 @@ def main(args):
     next = None
 
     team_one = None
+    team_one_score = None
     team_two = None
+    team_two_score = None
 
     if args.get("team_one_file", None) is not None:
         team_one = Team(args.get("team_one_file"))
     if args.get("team_one_score", None) is not None:
-        team_one_score = Team(args.get("team_one_score"))
+        team_one_score = args.get("team_one_score", None)
     if args.get("team_two_file", None) is not None:
         team_two = Team(args.get("team_two_file"))
     if args.get("team_two_score", None) is not None:
-        team_two_score = Team(args.get("team_two_score"))
+        team_two_score = args.get("team_two_score", None)
     # Initialize vars
     count = 0
     total_count = 0
@@ -609,22 +611,38 @@ def main(args):
             cropped = cv2.putText(cropped, FILENAME, (5, OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 255, 255), 1)
             # if DRAW_SCOREBOARD
             # TODO we should put some format in the Timestamps file to place score 
+            SCOREBOARD_WIDTH = 600
+            HALF_SCOREBOARD_WIDTH = SCOREBOARD_WIDTH // 2
+            SCORE_SECTION_WIDTH = HALF_SCOREBOARD_WIDTH // 6
+            SCOREBOARD_HEIGHT = 30
+            # Draw team one side
             if team_one is not None:
-                HALF_SCORE_WIDTH = 200
-                SCORE_HEIGHT = 30
+                # Team one is left-aligned, so we don't need any extra work
                 # Draw black rectangle for Dark score
                 # This is the inner-box, filled in
-                cv2.rectangle(cropped, (OUTPUT_SIZE[0]//2 - HALF_SCORE_WIDTH - 1, 0), (OUTPUT_SIZE[0]//2 - 1, SCORE_HEIGHT-2), team_one.bg_color, -1)
+                cv2.rectangle(cropped, (OUTPUT_SIZE[0]//2 - HALF_SCOREBOARD_WIDTH - 1, 0), (OUTPUT_SIZE[0]//2 - 1, SCOREBOARD_HEIGHT-2), team_one.bg_color, -1)
                 # This is the outer-box, just a thin line
-                cv2.rectangle(cropped, (OUTPUT_SIZE[0]//2 - HALF_SCORE_WIDTH - 1, 0), (OUTPUT_SIZE[0]//2 - 1, SCORE_HEIGHT-2), (255,255,255), 1)
-                cv2.putText(cropped, team_one.name, (OUTPUT_SIZE[0]//2 - HALF_SCORE_WIDTH + 5, SCORE_HEIGHT-4), cv2.FONT_HERSHEY_SIMPLEX, 1, team_one.font_color, 1)
+                cv2.rectangle(cropped, (OUTPUT_SIZE[0]//2 - HALF_SCOREBOARD_WIDTH - 1, 0), (OUTPUT_SIZE[0]//2 - 1, SCOREBOARD_HEIGHT-2), team_one.font_color, 1)
+                cv2.putText(cropped, team_one.name, (OUTPUT_SIZE[0]//2 - HALF_SCOREBOARD_WIDTH + 5, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_SIMPLEX, 1, team_one.font_color, 1)
+            if team_one_score is not None:
+                # Draw a box to put the Score into
+                cv2.rectangle(cropped, (OUTPUT_SIZE[0]//2 - SCORE_SECTION_WIDTH - 1, 0), (OUTPUT_SIZE[0]//2 - 1, SCOREBOARD_HEIGHT-2), team_one.font_color, 1)
+                cv2.putText(cropped, team_one_score, (OUTPUT_SIZE[0]//2 - SCORE_SECTION_WIDTH + 5, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_SIMPLEX, 1, team_one.font_color, 1)
+            # Draw team two side
             if team_two is not None:
+                # Team two needs to be right-aligned
+                team_two_text_size = cv2.getTextSize(team_two.name, cv2.FONT_HERSHEY_SIMPLEX, 1, 1)[0][0]
+                # print(team_two_text_size)
                 # Draw white rectangle for White score
                 # This is the inner-box, filled in
-                cv2.rectangle(cropped,(OUTPUT_SIZE[0]//2 + HALF_SCORE_WIDTH, 0), (OUTPUT_SIZE[0]//2 + 1, SCORE_HEIGHT-2), team_two.bg_color, -1)
+                cv2.rectangle(cropped,(OUTPUT_SIZE[0]//2 + HALF_SCOREBOARD_WIDTH, 0), (OUTPUT_SIZE[0]//2 + 1, SCOREBOARD_HEIGHT-2), team_two.bg_color, -1)
                 # This is the outer-box, just a thin line
-                cv2.rectangle(cropped,(OUTPUT_SIZE[0]//2 + HALF_SCORE_WIDTH, 0), (OUTPUT_SIZE[0]//2 + 1, SCORE_HEIGHT-2), (0,0,0), 1)
-                cv2.putText(cropped, team_two.name, (OUTPUT_SIZE[0]//2 + 5, SCORE_HEIGHT-4), cv2.FONT_HERSHEY_SIMPLEX, 1, team_two.font_color, 1)
+                cv2.rectangle(cropped,(OUTPUT_SIZE[0]//2 + HALF_SCOREBOARD_WIDTH, 0), (OUTPUT_SIZE[0]//2 + 1, SCOREBOARD_HEIGHT-2), team_two.font_color, 1)
+                cv2.putText(cropped, team_two.name, (OUTPUT_SIZE[0]//2 + HALF_SCOREBOARD_WIDTH - team_two_text_size, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_SIMPLEX, 1, team_two.font_color, 1)
+            if team_two_score is not None:
+                # Draw a box to put the Score into
+                cv2.rectangle(cropped,(OUTPUT_SIZE[0]//2 + SCORE_SECTION_WIDTH, 0), (OUTPUT_SIZE[0]//2 + 1, SCOREBOARD_HEIGHT-2), team_two.font_color, 1)
+                cv2.putText(cropped, team_two_score, (OUTPUT_SIZE[0]//2 + 5, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_SIMPLEX, 1, team_two.font_color, 1)
             # Write the current image to the video file
             if DEBUG:
                 print(f"{datetime.datetime.now()} / Write frame to disk")
@@ -785,8 +803,8 @@ if __name__ == "__main__":
     ap.add_argument("--show_debug", dest="show_debug", default=False, action='store_true', help="Show live debug output")
     ap.add_argument("--team_one_file", help="Path to file consisting of info for Team 1, on the left", type=str, default=None)
     ap.add_argument("--team_two_file", help="Path to file consisting of info for Team 2, on the right", type=str, default=None)
-    ap.add_argument("--team_one_score", help="Current score for Team 1", type=int, default=None)
-    ap.add_argument("--team_two_score", help="Current score for Team 2", type=int, default=None)
+    ap.add_argument("--team_one_score", help="Current score for Team 1", type=str, default=None)
+    ap.add_argument("--team_two_score", help="Current score for Team 2", type=str, default=None)
     args = vars(ap.parse_args())
 
     main(args)
