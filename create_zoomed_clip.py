@@ -180,7 +180,7 @@ def main(args):
     ZOOM_IN_DURATION_FRAMES = args["zoomin_duration_frames"]
 
     FILENAME = os.path.basename(os.path.splitext(args["video"])[0])
-    print(FILENAME)
+    logging.info(f"File: {FILENAME}")
 
     input_w = int(vs.get(cv2.CAP_PROP_FRAME_WIDTH ))
     input_h = int(vs.get(cv2.CAP_PROP_FRAME_HEIGHT ))
@@ -201,8 +201,8 @@ def main(args):
         print("Assigned default fps of 30")
         fps = 30
 
-    print(f"Frames: {frames_count} FPS: {fps} Duration: {duration}s")
-    print(f"Inputs: {input_w}x{input_h} @ {fps} fps")
+    logging.info(f"Frames: {frames_count} FPS: {fps} Duration: {duration}s")
+    logging.info(f"Inputs: {input_w}x{input_h} @ {fps} fps")
 
     mask = None
 
@@ -270,7 +270,8 @@ def main(args):
     if DEBUG:
         live_recording = cv2.VideoWriter(args["video"] + "_debug.mp4", cv2.VideoWriter_fourcc(*'MP4V'), fps, (input_w // ANALYZE_SHRINK_FACTOR, input_h // ANALYZE_SHRINK_FACTOR))
 
-    print(f"Beginning looping @ {datetime.datetime.now()}")
+    # print(f"Beginning looping @ {datetime.datetime.now()}")
+    logging.info("Beginning looping")
 
     # This should be set to true if we are moving while outside of the deadzone. 
     # If the flag is true, we want to continue to move towards the center, until we are within INNER_DEADZONE distance. Then the flag can be reset to False
@@ -626,6 +627,7 @@ def main(args):
             SCORE_SECTION_WIDTH = HALF_SCOREBOARD_WIDTH // 6
             SCOREBOARD_HEIGHT = 30
             # Draw team one side
+            logging.debug("Draw scoreboard")
             if team_one is not None:
                 # Team one is left-aligned, so we don't need any extra work
                 # Draw black rectangle for Dark score
