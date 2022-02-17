@@ -15,6 +15,9 @@ from numpy.core.fromnumeric import size
 from numpy.lib.function_base import append
 from roi_selector import create_roi_from_video, roi_selection
 from parse_teams import Team
+import logging
+
+
 
 # # This takes in a "target center" and outputs the "actual center"
 # def find_center_within_bounds(center_x, center_y, target_width, target_height, max_width, max_height):
@@ -46,7 +49,7 @@ def get_new_momentum(old_speed, new_distance):
     else:
         return max(old_speed - acceleration, 0)
 
-def find_dilated_canny_contours(canny, input_w, input_h):
+def find_dilated_canny_contours(canny, input_w, input_h, args):
     thresh = cv2.dilate(canny, None, iterations=1)
     cnts = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cnts = imutils.grab_contours(cnts)
@@ -87,8 +90,25 @@ def draw_debug_text(frame):
     frame = cv2.putText(frame, 'Else, shift the cropped frame from the white dot towards the green dot.', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,0,0), 2)
     frame = cv2.putText(frame, 'Else, shift the cropped frame from the white dot towards the green dot.', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (255,255,255), 1)
 
+    return frame
+
 
 def main(args):
+
+
+    DEBUG = args["debug"]
+    if DEBUG:
+        SHOW_DEBUG = True
+    else:
+        SHOW_DEBUG = args["show_debug"]
+
+    if DEBUG:
+        logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s %(message)s')
+    else:
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+
+    logging.info("Beginning clip")
+
     # if the video argument is None, then we are reading from webcam
     if args.get("video", None) is None:
         vs = VideoStream(src=0).start()
@@ -129,12 +149,6 @@ def main(args):
     old_center = None
 
     speed = 0
-
-    DEBUG = args["debug"]
-    if DEBUG:
-        SHOW_DEBUG = True
-    else:
-        SHOW_DEBUG = args["show_debug"]
 
     # Maximum movement speed of the cropped zone per frame.
     MAX_PIXEL_MOVEMENT_X = args["max_camera_movement_x"]
@@ -214,6 +228,7 @@ def main(args):
 
         # Draw the include box of all 1's
         include_mask_color = (255,)*channel_count
+        # 
         cv2.fillPoly(canny_mask, roi_corners, include_mask_color)
 
         # Draw the exclude box of all 0's
@@ -224,8 +239,7 @@ def main(args):
             exclude_mask_color = (0,)*channel_count
             cv2.fillPoly(canny_mask, exclude_corners, exclude_mask_color)
         # from Masterfool: use cv2.fillConvexPoly if you know it's convex
-        if DEBUG:
-            print(f"{datetime.datetime.now()} / Applying mask to frame")
+        logging.debug(f"Applying mask to frame")
         # apply the mask
         # canny_mask = cv2.bitwise_and(frame, canny_mask)
         return canny_mask, roi_corners
@@ -265,18 +279,13 @@ def main(args):
     # loop over the frames of the video
     while True:
         # print("LINE")
-        if DEBUG:
-            print(f"{datetime.datetime.now()} / Starting New Frame")
-        else:
-            pass
+        logging.debug(f"Starting New Frame")
             # print(f"\r{total_count:08d} frames / {int(total_count // fps):04d} seconds", end='')
         args["skip_starting_frames"] = 0
         # grab the current frame and initialize the occupied/unoccupied
-        # text
         frame = vs.read()
         frame = frame if args.get("video", None) is None else frame[1]
-        if DEBUG:
-            print(f"{datetime.datetime.now()} / Making copies and resizing")
+        logging.debug(f"Making copies and resizing")
         # if the frame could not be grabbed, then we have reached the end
         # of the video
         if frame is None:
@@ -293,13 +302,12 @@ def main(args):
         # Halves the size of the analyzed_frames
         # print(FORCED_WIDTH, ANALYZE_SHRINK_FACTOR)
 
-        if DEBUG:
-            print(f"{datetime.datetime.now()} / Resizing frame")
+        logging.debug(f"Resizing frame")
         frame = imutils.resize(frame, width=input_w // ANALYZE_SHRINK_FACTOR)
         
-        if DEBUG:
-            print(f"{datetime.datetime.now()} / Done resizing frame")
+        logging.debug(f"Done resizing frame")
         if mask is None:
+            logging.debug("Creating mask")
             if args.get("roi_filepath", None):
                 mask, roi_corners = parse_roi_file(args["roi_filepath"], frame)
             else:
@@ -314,16 +322,18 @@ def main(args):
             m2 *= TRANSPARENCY # .008 secs
             # Create our pure green mask
             green = np.ones(frame.shape, dtype=np.float)*(0,1,0) # .04 secs
-        
+            logging.debug("Done creating mask")
+
+        logging.debug("Running Canny detection")
         canny = frame.copy()
         canny = cv2.Canny(canny, 240, 250)
         # print(frame)
         # print(canny.shape)
         # print(mask.shape)
         canny = cv2.bitwise_and(canny, bw_mask)
-
+        logging.debug("Find Dilated Canny contours")
         # Dilate the image to fill in gaps, then find contours
-        canny_min_x, canny_max_x, canny_min_y, canny_max_y, thresh = find_dilated_canny_contours(canny, input_w, input_h)
+        canny_min_x, canny_max_x, canny_min_y, canny_max_y, thresh = find_dilated_canny_contours(canny, input_w, input_h, args)
 
         # Draw a line from roi_cones[0] to roi_cones[2]
         # Draws a line on each sideline.
@@ -361,6 +371,7 @@ def main(args):
         # print(f"({canny_min_x}, {canny_min_y}) / ({canny_max_x}, {canny_max_y})")
         # frame = cv2.putText(frame, 'Edge Detection bounds in Green', (canny_min_x, canny_min_y-5), cv2.FONT_HERSHEY_SIMPLEX, .5, (255,255,255), 2)
         # frame = cv2.putText(frame, 'Edge Detection bounds in Green', (canny_min_x, canny_min_y-5), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,255,0), 1)
+        logging.debug(f"Draw debug text")
         frame = draw_debug_text(frame)
         # If green dot is within "Movement Deadzone", don't move. 
         # If green box is within "Outer buffer box", don't move.
@@ -376,8 +387,7 @@ def main(args):
             x_max = None
             y_max = None
 
-        if DEBUG:
-            print(f"{datetime.datetime.now()} / Starting to locate camera-center processing")
+        logging.debug(f"Starting to locate camera-center processing")
         # If we didn't find any Canny Edges, re-use values from prior
         if not canny_min_x or total_count % FRAMES_BETWEEN_RE_COMPARE != 0:
             # print("REUSING OLD CENTER")
@@ -624,10 +634,10 @@ def main(args):
                 # This is the outer-box, just a thin line
                 cv2.rectangle(cropped, (OUTPUT_SIZE[0]//2 - HALF_SCOREBOARD_WIDTH - 1, 0), (OUTPUT_SIZE[0]//2 - 1, SCOREBOARD_HEIGHT-2), team_one.font_color, 1)
                 cv2.putText(cropped, team_one.name, (OUTPUT_SIZE[0]//2 - HALF_SCOREBOARD_WIDTH + 5, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_SIMPLEX, 1, team_one.font_color, 1)
-            if team_one_score is not None:
-                # Draw a box to put the Score into
-                cv2.rectangle(cropped, (OUTPUT_SIZE[0]//2 - SCORE_SECTION_WIDTH - 1, 0), (OUTPUT_SIZE[0]//2 - 1, SCOREBOARD_HEIGHT-2), team_one.font_color, 1)
-                cv2.putText(cropped, team_one_score, (OUTPUT_SIZE[0]//2 - SCORE_SECTION_WIDTH + 5, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_SIMPLEX, 1, team_one.font_color, 1)
+                if team_one_score is not None:
+                    # Draw a box to put the Score into
+                    cv2.rectangle(cropped, (OUTPUT_SIZE[0]//2 - SCORE_SECTION_WIDTH - 1, 0), (OUTPUT_SIZE[0]//2 - 1, SCOREBOARD_HEIGHT-2), team_one.font_color, 1)
+                    cv2.putText(cropped, str(team_one_score), (OUTPUT_SIZE[0]//2 - SCORE_SECTION_WIDTH + 5, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_SIMPLEX, 1, team_one.font_color, 1)
             # Draw team two side
             if team_two is not None:
                 # Team two needs to be right-aligned
@@ -639,13 +649,12 @@ def main(args):
                 # This is the outer-box, just a thin line
                 cv2.rectangle(cropped,(OUTPUT_SIZE[0]//2 + HALF_SCOREBOARD_WIDTH, 0), (OUTPUT_SIZE[0]//2 + 1, SCOREBOARD_HEIGHT-2), team_two.font_color, 1)
                 cv2.putText(cropped, team_two.name, (OUTPUT_SIZE[0]//2 + HALF_SCOREBOARD_WIDTH - team_two_text_size, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_SIMPLEX, 1, team_two.font_color, 1)
-            if team_two_score is not None:
-                # Draw a box to put the Score into
-                cv2.rectangle(cropped,(OUTPUT_SIZE[0]//2 + SCORE_SECTION_WIDTH, 0), (OUTPUT_SIZE[0]//2 + 1, SCOREBOARD_HEIGHT-2), team_two.font_color, 1)
-                cv2.putText(cropped, team_two_score, (OUTPUT_SIZE[0]//2 + 5, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_SIMPLEX, 1, team_two.font_color, 1)
+                if team_two_score is not None:
+                    # Draw a box to put the Score into
+                    cv2.rectangle(cropped,(OUTPUT_SIZE[0]//2 + SCORE_SECTION_WIDTH, 0), (OUTPUT_SIZE[0]//2 + 1, SCOREBOARD_HEIGHT-2), team_two.font_color, 1)
+                    cv2.putText(cropped, str(team_two_score), (OUTPUT_SIZE[0]//2 + 5, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_SIMPLEX, 1, team_two.font_color, 1)
             # Write the current image to the video file
-            if DEBUG:
-                print(f"{datetime.datetime.now()} / Write frame to disk")
+            logging.debug(f"Write frame to disk")
             if WRITE_VIDEO:
                 if total_count < ZOOM_IN_DURATION_FRAMES:
                     pass
@@ -667,8 +676,8 @@ def main(args):
 
             # if SHOW_DEBUG:
             # Green overlay disabled for now
-            if DEBUG:
-                print(f"{datetime.datetime.now()} / Generate green overlay")
+            if False: # DEBUG:
+                print(f"Generate green overlay")
                 # Draw the threshold over top of the live frame
                 frame = np.bitwise_or(frame, thresh[:, :, np.newaxis])
                 # We'd rather this be AFTER the overlay, but it's more complex now that the frame is decimal instead of int
@@ -685,10 +694,9 @@ def main(args):
                 # Draw polygon of the Masked-Area. This is NOT accurate, it does not include the Exclusion zones
                 cv2.polylines(frame, roi_corners, True, (0, 0, 255), 2)
 
-            if DEBUG:
-                print(f"{datetime.datetime.now()} / Draw debug rectangles over everything")
 
             if SHOW_DEBUG:
+                logging.debug(f"Draw debug rectangles over everything")
                 # Draw the outer buffer box
                 cv2.rectangle(frame, (left_buffer, top_buffer), (right_buffer, bottom_buffer), (255, 255, 255), 1)
                 frame = cv2.putText(frame, 'Outer buffer box', (left_buffer, top_buffer-5), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,0,0), 2)
@@ -716,7 +724,7 @@ def main(args):
 
             # If we want to keep our debug output, write the "live" frame to a debug file
             if DEBUG:
-                print(f"{datetime.datetime.now()} / Write debug view to disk")
+                print(f"Write debug view to disk")
                 live_frame = cv2.resize(frame, (input_w // ANALYZE_SHRINK_FACTOR, input_h // ANALYZE_SHRINK_FACTOR))
                 live_recording.write(live_frame)
 
@@ -746,7 +754,7 @@ def main(args):
         live_recording.release()
     vs.stop() if args.get("video", None) is None else vs.release()
     cv2.destroyAllWindows()
-    print(f"Done @ {datetime.datetime.now()}")
+    logging.info("Clip completed")
     return 0 
 
 def run_args(zoom_args):
@@ -773,8 +781,8 @@ def run_args(zoom_args):
     ap.add_argument("--show_debug", dest="show_debug", default=False, action='store_true', help="Show live debug output")
     ap.add_argument("--team_one_file", help="Path to file consisting of info for Team 1, on the left", type=str, default=None)
     ap.add_argument("--team_two_file", help="Path to file consisting of info for Team 2, on the right", type=str, default=None)
-    ap.add_argument("--team_one_score", help="Current score for Team 1", type=int, default=None)
-    ap.add_argument("--team_two_score", help="Current score for Team 2", type=int, default=None)
+    ap.add_argument("--team_one_score", "--t1s", help="Current score for Team 1", type=int, default=None)
+    ap.add_argument("--team_two_score", "--t2s", help="Current score for Team 2", type=int, default=None)
     args = vars(ap.parse_args(zoom_args))
     print(args)
     return main(args)
@@ -803,8 +811,8 @@ if __name__ == "__main__":
     ap.add_argument("--show_debug", dest="show_debug", default=False, action='store_true', help="Show live debug output")
     ap.add_argument("--team_one_file", help="Path to file consisting of info for Team 1, on the left", type=str, default=None)
     ap.add_argument("--team_two_file", help="Path to file consisting of info for Team 2, on the right", type=str, default=None)
-    ap.add_argument("--team_one_score", help="Current score for Team 1", type=str, default=None)
-    ap.add_argument("--team_two_score", help="Current score for Team 2", type=str, default=None)
+    ap.add_argument("--team_one_score", "--t1s", help="Current score for Team 1", type=str, default=None)
+    ap.add_argument("--team_two_score", "--t2s", help="Current score for Team 2", type=str, default=None)
     args = vars(ap.parse_args())
 
     main(args)

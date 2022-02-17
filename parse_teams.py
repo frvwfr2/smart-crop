@@ -22,7 +22,7 @@ class Team:
             self.colorname = team_color
             self.members = members
             hex_bg_color = colors.cnames[self.colorname]
-            print(hex_bg_color)
+            # print(hex_bg_color)
             red, green, blue = colors.to_rgb(hex_bg_color)
             # OpenCV expects BGR, not RGB :(
             self.bg_color = (blue*255, green*255, red*255)
@@ -34,7 +34,7 @@ class Team:
                 # Use White font
                 self.font_color = (255, 255, 255)
                 self.accent_color = (0, 0, 0)
-            print(self.font_color)
+            # print(self.font_color)
 
     def __repr__(self):
         return f"{self.name} ({self.colorname}) {len(self.members)} players"

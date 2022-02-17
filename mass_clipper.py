@@ -15,6 +15,8 @@ class Clip:
         self.end = end
         self.name = name
         self.arguments = arguments
+        self.team_one_score = None
+        self.team_two_score = None
 
 def chunks(lst, n):
     """Yield successive n-sized chunks from lst."""

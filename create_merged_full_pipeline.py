@@ -59,6 +59,8 @@ ap.add_argument("-d", "--directory", help="Full path to the directory to write f
 ap.add_argument("--no_zoom", action='store_true', help="Don't perform zooms, just chop up the clips")
 ap.add_argument("--base_output_prefix", help="Prefix to use on the in-between clips that are generated", default="clip")
 ap.add_argument("--debug", help="Enable debug mode in the zoomed_clip_maker", action="store_true")
+ap.add_argument("--team_one_file", help="Path to the file describing team_one", default=None)
+ap.add_argument("--team_two_file", help="Path to the file describing team_two", default=None)
 args = vars(ap.parse_args())
 
 print(args)
@@ -89,6 +91,7 @@ elif args["roi_file"]:
 else:
     print("No ROI file provided, please input values in the window")
     # roi_filename = create_roi_from_video(args["video"])
+    # If we have more than one clip, use the 2nd to create the ROI in case we were moving the camera at the start of Clip_01
     if len(clips) > 1:
         roi_filename = create_roi_from_video(f"{directory}\{clips[1].name}")
     else:
@@ -97,6 +100,7 @@ else:
 
 # File to write our final mergelist to
 with open(f"{directory}\post_{args['base_output_prefix']}_files.txt", 'w') as f:
+    # For each Clip we produced...
     for clip in clips:
         if args["no_zoom"]:
             f.write(f"file '{directory}\\{clip.name}'\n")
@@ -108,7 +112,12 @@ with open(f"{directory}\post_{args['base_output_prefix']}_files.txt", 'w') as f:
     # for i in range(1, clip_count + 1):
         print(f"WORKING ON {clip.name}")
         # zoom_parser = argparse.ArgumentParser()
+        # Create the arguments to pass to create_zoomed_clip.py
         zoom_args = ['-v', f"{directory}\{clip.name}", '--roi_filepath', roi_filename, "-o", f"{directory}\zoomed_{clip.name}", "-w"]
+        if args["team_one_file"]:
+            zoom_args.extend(["--team_one_file", args["team_one_file"]])
+        if args["team_two_file"]:
+            zoom_args.extend(["--team_two_file", args["team_two_file"]])
         if clip.arguments:
             zoom_args.extend(clip.arguments.split())
         if args["debug"]:
@@ -128,7 +137,7 @@ with open(f"{directory}\post_{args['base_output_prefix']}_files.txt", 'w') as f:
 
         # delete the two component files for the audio + video, that have since been re-encoded
         os.remove(f"{directory}\zoomed_{clip.name}")
-        os.remove(f'{directory}\{clip.name}')
+        # os.remove(f'{directory}\{clip.name}')
         os.remove(f"{final_file}")
         # Write the filename to the mergelist
         # sys.exit()
