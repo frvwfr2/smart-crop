@@ -72,23 +72,23 @@ def find_dilated_canny_contours(canny, input_w, input_h, args):
 
 def draw_debug_text(frame):
     text_y = 15
-    frame = cv2.putText(frame, 'Edge Detection bounds in Green', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,0,0), 2)
-    frame = cv2.putText(frame, 'Edge Detection bounds in Green', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,255,0), 1)
+    frame = cv2.putText(frame, 'Edge Detection bounds in Green', (2, text_y), cv2.FONT_HERSHEY_DUPLEX, .5, (0,0,0), 2)
+    frame = cv2.putText(frame, 'Edge Detection bounds in Green', (2, text_y), cv2.FONT_HERSHEY_DUPLEX, .5, (0,255,0), 1)
     text_y += 20
-    frame = cv2.putText(frame, 'Green dot is "Center of target"', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,0,0), 2)
-    frame = cv2.putText(frame, 'Green dot is "Center of target"', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,255,0), 1)
+    frame = cv2.putText(frame, 'Green dot is "Center of target"', (2, text_y), cv2.FONT_HERSHEY_DUPLEX, .5, (0,0,0), 2)
+    frame = cv2.putText(frame, 'Green dot is "Center of target"', (2, text_y), cv2.FONT_HERSHEY_DUPLEX, .5, (0,255,0), 1)
     text_y += 20
-    frame = cv2.putText(frame, 'White dot is "Current center"', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,0,0), 2)
-    frame = cv2.putText(frame, 'White dot is "Current center"', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (255,255,255), 1)
+    frame = cv2.putText(frame, 'White dot is "Current center"', (2, text_y), cv2.FONT_HERSHEY_DUPLEX, .5, (0,0,0), 2)
+    frame = cv2.putText(frame, 'White dot is "Current center"', (2, text_y), cv2.FONT_HERSHEY_DUPLEX, .5, (255,255,255), 1)
     text_y += 20
-    frame = cv2.putText(frame, 'If green dot is within "Movement Deadzone", don\'t move. ', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,0,0), 2)
-    frame = cv2.putText(frame, 'If green dot is within "Movement Deadzone", don\'t move. ', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (255,255,255), 1)
+    frame = cv2.putText(frame, 'If green dot is within "Movement Deadzone", don\'t move. ', (2, text_y), cv2.FONT_HERSHEY_DUPLEX, .5, (0,0,0), 2)
+    frame = cv2.putText(frame, 'If green dot is within "Movement Deadzone", don\'t move. ', (2, text_y), cv2.FONT_HERSHEY_DUPLEX, .5, (255,255,255), 1)
     text_y += 20
-    frame = cv2.putText(frame, 'If green box is within "Outer buffer box", don\'t move.', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,0,0), 2)
-    frame = cv2.putText(frame, 'If green box is within "Outer buffer box", don\'t move.', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (255,255,255), 1)
+    frame = cv2.putText(frame, 'If green box is within "Outer buffer box", don\'t move.', (2, text_y), cv2.FONT_HERSHEY_DUPLEX, .5, (0,0,0), 2)
+    frame = cv2.putText(frame, 'If green box is within "Outer buffer box", don\'t move.', (2, text_y), cv2.FONT_HERSHEY_DUPLEX, .5, (255,255,255), 1)
     text_y += 20
-    frame = cv2.putText(frame, 'Else, shift the cropped frame from the white dot towards the green dot.', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,0,0), 2)
-    frame = cv2.putText(frame, 'Else, shift the cropped frame from the white dot towards the green dot.', (2, text_y), cv2.FONT_HERSHEY_SIMPLEX, .5, (255,255,255), 1)
+    frame = cv2.putText(frame, 'Else, shift the cropped frame from the white dot towards the green dot.', (2, text_y), cv2.FONT_HERSHEY_DUPLEX, .5, (0,0,0), 2)
+    frame = cv2.putText(frame, 'Else, shift the cropped frame from the white dot towards the green dot.', (2, text_y), cv2.FONT_HERSHEY_DUPLEX, .5, (255,255,255), 1)
 
     return frame
 
@@ -370,10 +370,11 @@ def main(args):
         # canny_max_y = max_y
 
         # print(f"({canny_min_x}, {canny_min_y}) / ({canny_max_x}, {canny_max_y})")
-        # frame = cv2.putText(frame, 'Edge Detection bounds in Green', (canny_min_x, canny_min_y-5), cv2.FONT_HERSHEY_SIMPLEX, .5, (255,255,255), 2)
-        # frame = cv2.putText(frame, 'Edge Detection bounds in Green', (canny_min_x, canny_min_y-5), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,255,0), 1)
-        logging.debug(f"Draw debug text")
-        frame = draw_debug_text(frame)
+        # frame = cv2.putText(frame, 'Edge Detection bounds in Green', (canny_min_x, canny_min_y-5), cv2.FONT_HERSHEY_DUPLEX, .5, (255,255,255), 2)
+        # frame = cv2.putText(frame, 'Edge Detection bounds in Green', (canny_min_x, canny_min_y-5), cv2.FONT_HERSHEY_DUPLEX, .5, (0,255,0), 1)
+        if DEBUG:
+            logging.debug(f"Draw debug text")
+            frame = draw_debug_text(frame)
         # If green dot is within "Movement Deadzone", don't move. 
         # If green box is within "Outer buffer box", don't move.
         # Else, shift the cropped frame from the white dot towards the green dot.
@@ -394,22 +395,23 @@ def main(args):
             # print("REUSING OLD CENTER")
             # print("NO Canny Edges found")
             # If we had previous values to use, then produce an object from those
-            if center_x and center_y:
+            if DEBUG and center_x and center_y:
                 # Draw a green center-dot where the center of the edges are. This matches the Green Box that defines this point
                 cv2.rectangle(frame, (center_x-1, center_y-1), (center_x+1, center_y+1), (0, 255, 0), 2)
                 # Draw a blue box showing the cropped section
                 cv2.rectangle(frame, (top_x, top_y), (top_x + input_w//ZOOM_FACTOR, top_y + input_h//ZOOM_FACTOR), (255, 0, 0), 2)
-                frame = cv2.putText(frame, 'Cropped frame', (top_x, top_y-5), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,0,0), 2)
-                frame = cv2.putText(frame, 'Cropped frame', (top_x, top_y-5), cv2.FONT_HERSHEY_SIMPLEX, .5, (255,0,0), 1)
+                frame = cv2.putText(frame, 'Cropped frame', (top_x, top_y-5), cv2.FONT_HERSHEY_DUPLEX, .5, (0,0,0), 2)
+                frame = cv2.putText(frame, 'Cropped frame', (top_x, top_y-5), cv2.FONT_HERSHEY_DUPLEX, .5, (255,0,0), 1)
             # If we did not have previous values to use, write out the full frame. This should only ever occur on the very first frame(s).
-            else:
+            if not (center_x and center_y):
                 print("WRITING BAD OUTPUT")
                 # raise ValueError("No canny edges detected in frame, and no center yet produced")
                 frame = cv2.resize(frame, (OUTPUT_SIZE[0], OUTPUT_SIZE[1]))
                 # Write the current image to the video file
                 if WRITE_VIDEO:
-                    frame = cv2.putText(frame, FILENAME, (5, OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_SIMPLEX, .5, (0, 0, 0), 3)
-                    frame = cv2.putText(frame, FILENAME, (5, OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 255, 255), 1)
+                    # Write the clip name on the frame, before sending to file
+                    frame = cv2.putText(frame, FILENAME, (5, OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (0, 0, 0), 3)
+                    frame = cv2.putText(frame, FILENAME, (5, OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (255, 255, 255), 1)
                     cropped_recording.write(frame)
                 continue
         else:
@@ -477,8 +479,8 @@ def main(args):
                         new_center[0] = old_center[0]
             # To calculate Zoom, we want to get x_max - x_min. If that value is larger than our Crop target, then we need to zoom out some.
 
-            # cropped = cv2.putText(cropped, FILENAME, (5, OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_SIMPLEX, .5, (0, 0, 0), 3)
-            # cropped = cv2.putText(cropped, FILENAME, (5, OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 255, 255), 1)
+            # cropped = cv2.putText(cropped, FILENAME, (5, OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (0, 0, 0), 3)
+            # cropped = cv2.putText(cropped, FILENAME, (5, OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (255, 255, 255), 1)
             
             # TODO add an outer deadzone. "If the objects detected are well within the bounds, don't move at all. "
             # Limit movement to MAX_PIXEL_MOVEMENT_X/Y pixels
@@ -609,8 +611,8 @@ def main(args):
                 # print(cropped_x1, cropped_y1, cropped_x2, cropped_y2)
                 # Draw the cropping box in blue
                 cv2.rectangle(frame, (cropped_x1 // ZOOM_FACTOR, cropped_y1 // ZOOM_FACTOR), (cropped_x2 // ZOOM_FACTOR, cropped_y2 // ZOOM_FACTOR), (255, 0, 0), 1)
-                frame = cv2.putText(frame, 'Cropped frame', (cropped_x1 // ZOOM_FACTOR, cropped_y1 // ZOOM_FACTOR - 5), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,0,0), 2)
-                frame = cv2.putText(frame, 'Cropped frame', (cropped_x1 // ZOOM_FACTOR, cropped_y1 // ZOOM_FACTOR - 5), cv2.FONT_HERSHEY_SIMPLEX, .5, (255,0,0), 1)
+                frame = cv2.putText(frame, 'Cropped frame', (cropped_x1 // ZOOM_FACTOR, cropped_y1 // ZOOM_FACTOR - 5), cv2.FONT_HERSHEY_DUPLEX, .5, (0,0,0), 2)
+                frame = cv2.putText(frame, 'Cropped frame', (cropped_x1 // ZOOM_FACTOR, cropped_y1 // ZOOM_FACTOR - 5), cv2.FONT_HERSHEY_DUPLEX, .5, (255,0,0), 1)
 
             # Cut down the size of the cropped box to what we actually want, rather than the full frame
             cropped = cropped[cropped_y1:cropped_y2, cropped_x1:cropped_x2]
@@ -618,8 +620,8 @@ def main(args):
 
             # Write the name of the clip at the top left
             # Write a black outline, followed by the same text but in white and thinner
-            cropped = cv2.putText(cropped, FILENAME, (5, OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_SIMPLEX, .5, (0, 0, 0), 3)
-            cropped = cv2.putText(cropped, FILENAME, (5, OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 255, 255), 1)
+            cropped = cv2.putText(cropped, FILENAME, (5, OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (0, 0, 0), 3)
+            cropped = cv2.putText(cropped, FILENAME, (5, OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (255, 255, 255), 1)
             # if DRAW_SCOREBOARD
             # TODO we should put some format in the Timestamps file to place score 
             SCOREBOARD_WIDTH = 600
@@ -635,26 +637,26 @@ def main(args):
                 cv2.rectangle(cropped, (OUTPUT_SIZE[0]//2 - HALF_SCOREBOARD_WIDTH - 1, 0), (OUTPUT_SIZE[0]//2 - 1, SCOREBOARD_HEIGHT-2), team_one.bg_color, -1)
                 # This is the outer-box, just a thin line
                 cv2.rectangle(cropped, (OUTPUT_SIZE[0]//2 - HALF_SCOREBOARD_WIDTH - 1, 0), (OUTPUT_SIZE[0]//2 - 1, SCOREBOARD_HEIGHT-2), team_one.font_color, 1)
-                cv2.putText(cropped, team_one.name, (OUTPUT_SIZE[0]//2 - HALF_SCOREBOARD_WIDTH + 5, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_SIMPLEX, 1, team_one.font_color, 1)
+                cv2.putText(cropped, team_one.name, (OUTPUT_SIZE[0]//2 - HALF_SCOREBOARD_WIDTH + 5, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_DUPLEX, 1, team_one.font_color, 1)
                 if team_one_score is not None:
                     # Draw a box to put the Score into
                     cv2.rectangle(cropped, (OUTPUT_SIZE[0]//2 - SCORE_SECTION_WIDTH - 1, 0), (OUTPUT_SIZE[0]//2 - 1, SCOREBOARD_HEIGHT-2), team_one.font_color, 1)
-                    cv2.putText(cropped, str(team_one_score), (OUTPUT_SIZE[0]//2 - SCORE_SECTION_WIDTH + 5, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_SIMPLEX, 1, team_one.font_color, 1)
+                    cv2.putText(cropped, str(team_one_score), (OUTPUT_SIZE[0]//2 - SCORE_SECTION_WIDTH + 5, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_DUPLEX, 1, team_one.font_color, 1)
             # Draw team two side
             if team_two is not None:
                 # Team two needs to be right-aligned
-                team_two_text_size = cv2.getTextSize(team_two.name, cv2.FONT_HERSHEY_SIMPLEX, 1, 1)[0][0]
+                team_two_text_size = cv2.getTextSize(team_two.name, cv2.FONT_HERSHEY_DUPLEX, 1, 1)[0][0]
                 # print(team_two_text_size)
                 # Draw white rectangle for White score
                 # This is the inner-box, filled in
                 cv2.rectangle(cropped,(OUTPUT_SIZE[0]//2 + HALF_SCOREBOARD_WIDTH, 0), (OUTPUT_SIZE[0]//2 + 1, SCOREBOARD_HEIGHT-2), team_two.bg_color, -1)
                 # This is the outer-box, just a thin line
                 cv2.rectangle(cropped,(OUTPUT_SIZE[0]//2 + HALF_SCOREBOARD_WIDTH, 0), (OUTPUT_SIZE[0]//2 + 1, SCOREBOARD_HEIGHT-2), team_two.font_color, 1)
-                cv2.putText(cropped, team_two.name, (OUTPUT_SIZE[0]//2 + HALF_SCOREBOARD_WIDTH - team_two_text_size, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_SIMPLEX, 1, team_two.font_color, 1)
+                cv2.putText(cropped, team_two.name, (OUTPUT_SIZE[0]//2 + HALF_SCOREBOARD_WIDTH - team_two_text_size, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_DUPLEX, 1, team_two.font_color, 1)
                 if team_two_score is not None:
                     # Draw a box to put the Score into
                     cv2.rectangle(cropped,(OUTPUT_SIZE[0]//2 + SCORE_SECTION_WIDTH, 0), (OUTPUT_SIZE[0]//2 + 1, SCOREBOARD_HEIGHT-2), team_two.font_color, 1)
-                    cv2.putText(cropped, str(team_two_score), (OUTPUT_SIZE[0]//2 + 5, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_SIMPLEX, 1, team_two.font_color, 1)
+                    cv2.putText(cropped, str(team_two_score), (OUTPUT_SIZE[0]//2 + 5, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_DUPLEX, 1, team_two.font_color, 1)
             # Write the current image to the video file
             logging.debug(f"Write frame to disk")
             if WRITE_VIDEO:
@@ -701,8 +703,8 @@ def main(args):
                 logging.debug(f"Draw debug rectangles over everything")
                 # Draw the outer buffer box
                 cv2.rectangle(frame, (left_buffer, top_buffer), (right_buffer, bottom_buffer), (255, 255, 255), 1)
-                frame = cv2.putText(frame, 'Outer buffer box', (left_buffer, top_buffer-5), cv2.FONT_HERSHEY_SIMPLEX, .5, (0,0,0), 2)
-                frame = cv2.putText(frame, 'Outer buffer box', (left_buffer, top_buffer-5), cv2.FONT_HERSHEY_SIMPLEX, .5, (255,255,255), 1)
+                frame = cv2.putText(frame, 'Outer buffer box', (left_buffer, top_buffer-5), cv2.FONT_HERSHEY_DUPLEX, .5, (0,0,0), 2)
+                frame = cv2.putText(frame, 'Outer buffer box', (left_buffer, top_buffer-5), cv2.FONT_HERSHEY_DUPLEX, .5, (255,255,255), 1)
 
                 # Draw bounds of what the Canny is detecting
                 cv2.rectangle(frame, (canny_min_x, canny_min_y), (canny_max_x, canny_max_y), (0, 255, 0), 1)
@@ -712,8 +714,8 @@ def main(args):
                 cv2.rectangle(frame, (new_center[0] - INNER_DEADZONE_X, new_center[1] - INNER_DEADZONE_Y), (new_center[0] + INNER_DEADZONE_X, new_center[1] + INNER_DEADZONE_Y), (255,255,255), 1)
                 # Outer deadzone
                 cv2.rectangle(frame, (new_center[0] - DEADZONE_X, new_center[1] - DEADZONE_Y), (new_center[0] + DEADZONE_X, new_center[1] + DEADZONE_Y), (255,255,255), 1)
-                frame = cv2.putText(frame, "Movement deadzone", (new_center[0] - DEADZONE_X, new_center[1] - DEADZONE_Y - 5), cv2.FONT_HERSHEY_SIMPLEX, .5, (0, 0, 0), 2)
-                frame = cv2.putText(frame, "Movement deadzone", (new_center[0] - DEADZONE_X, new_center[1] - DEADZONE_Y - 5), cv2.FONT_HERSHEY_SIMPLEX, .5, (255, 255, 255), 1)
+                frame = cv2.putText(frame, "Movement deadzone", (new_center[0] - DEADZONE_X, new_center[1] - DEADZONE_Y - 5), cv2.FONT_HERSHEY_DUPLEX, .5, (0, 0, 0), 2)
+                frame = cv2.putText(frame, "Movement deadzone", (new_center[0] - DEADZONE_X, new_center[1] - DEADZONE_Y - 5), cv2.FONT_HERSHEY_DUPLEX, .5, (255, 255, 255), 1)
                 # This draws a box showing what the Cropped Image will contain
                 # cv2.rectangle(frame, (smooth_top_x * ANALYZE_SHRINK_FACTOR * ZOOM_FACTOR, smooth_top_y * ANALYZE_SHRINK_FACTOR * ZOOM_FACTOR), (smooth_top_x + FORCED_WIDTH//(ZOOM_FACTOR * ANALYZE_SHRINK_FACTOR), smooth_top_y + FORCED_HEIGHT//(ZOOM_FACTOR * ANALYZE_SHRINK_FACTOR)), (255, 255, 255), 2)
                 # Draw a pixel at the center of the in-the-moment edges
