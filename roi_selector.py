@@ -12,6 +12,13 @@ from numpy.core.fromnumeric import size
 
 # ROI means "Region of Interest"
 
+def parse_roi_file(roi_filepath):
+    with open(roi_filepath) as f:
+        data = json.load(f)
+        roi_include = data["include"]
+        roi_exclude = data["exclude"]
+        roi_cones = data["conelist"]
+    return roi_include, roi_exclude, roi_cones
 
 def save_coord(event, x, y, flags, param):
     global whitelist, blacklist, conelist, mode_flag

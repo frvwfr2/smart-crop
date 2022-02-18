@@ -13,7 +13,7 @@ import sys
 import json
 from numpy.core.fromnumeric import size
 from numpy.lib.function_base import append
-from roi_selector import create_roi_from_video, roi_selection
+from roi_selector import create_roi_from_video, roi_selection, parse_roi_file
 from parse_teams import Team
 import logging
 
@@ -28,7 +28,7 @@ import logging
 #     cropped_x1 = max(center_x - target_width // 2, 0)
 #     # Ensure we aren't off the screen to the right
 #     cropped_x1 = min((cropped_x1, max_width - target_width))
-#     # cropped_x2 = min((ZOOM_FACTOR * ANALYZE_SHRINK_FACTOR * new_center[0]) + OUTPUT_SIZE[0] // 2, 3840)
+#     # cropped_x2 = min((self.ZOOM_FACTOR * ANALYZE_SHRINK_FACTOR * new_center[0]) + self.OUTPUT_SIZE[0] // 2, 3840)
 #     cropped_x2 = cropped_x1 + target_width
 
 #     # Ensure we aren't off the screen to the top
@@ -93,129 +93,17 @@ def draw_debug_text(frame):
     return frame
 
 
-def main(args):
+# def main(args):
 
-
-    DEBUG = args["debug"]
-    if DEBUG:
-        SHOW_DEBUG = True
-    else:
-        SHOW_DEBUG = args["show_debug"]
-
-    if DEBUG:
-        logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s %(message)s')
-    else:
-        logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
-
-    logging.info("Beginning clip")
-
-    # if the video argument is None, then we are reading from webcam
-    if args.get("video", None) is None:
-        vs = VideoStream(src=0).start()
-        time.sleep(2.0)
-    # otherwise, we are reading from a video file
-    else:
-        vs = cv2.VideoCapture(args["video"])
-    # initialize the first frame in the video stream
-    firstFrame = None
-    next = None
-
-    team_one = None
-    team_one_score = None
-    team_two = None
-    team_two_score = None
-
-    if args.get("team_one_file", None) is not None:
-        team_one = Team(args.get("team_one_file"))
-    if args.get("team_one_score", None) is not None:
-        team_one_score = args.get("team_one_score", None)
-    if args.get("team_two_file", None) is not None:
-        team_two = Team(args.get("team_two_file"))
-    if args.get("team_two_score", None) is not None:
-        team_two_score = args.get("team_two_score", None)
-    # Initialize vars
-    count = 0
-    total_count = 0
-
-    center_x = None
-    center_y = None
-    top_x = None
-    top_y = None
-
-    smooth_top_x = None
-    smooth_top_y = None
-
-    new_center = None
-    old_center = None
-
-    speed = 0
-
-    # Maximum movement speed of the cropped zone per frame.
-    MAX_PIXEL_MOVEMENT_X = args["max_camera_movement_x"]
-    # MAX_PIXEL_MOVEMENT_X = 10
-    MAX_PIXEL_MOVEMENT_Y = args["max_camera_movement_x"]
-
-    # Transparency level
-    TRANSPARENCY = .3
-
-    # Deadzone where the camera doesn't move at all, as long as the center is still within that many pixels.
-    DEADZONE_X = args["deadzone_x"]
-    DEADZONE_Y = args["deadzone_y"]
-    INNER_DEADZONE_X = DEADZONE_X // 2
-    INNER_DEADZONE_Y = DEADZONE_Y // 2
-    OUTER_BOUND_BUFFER_X = args["outer_bound_buffer_x"]
-    OUTER_BOUND_BUFFER_Y = args["outer_bound_buffer_y"]
-
-
-    # This value defines if the crop should attempt to keep the video centered on the boxes, or simply stop moving if all the boxes are still inside the crop.
-    PREVENT_PAN_WHILE_BOUNDED = False
-    # Flag to disable writing video
-    WRITE_VIDEO = args["write"]
-    # Not implemented. How much time would it save us if we only re-calculated the "new-center" every 5 frames, rather than every single frame?
-    FRAMES_BETWEEN_RE_COMPARE = 1
-    MAX_PIXEL_MOVEMENT_X *= FRAMES_BETWEEN_RE_COMPARE
-    MAX_PIXEL_MOVEMENT_Y *= FRAMES_BETWEEN_RE_COMPARE
-    # This flag defines if we are still in the "slow-zoom" phase of a clip.
-    # Does this need to be a counter? Let's do that for now, for flexibility
-    ZOOM_IN_DURATION_FRAMES = args["zoomin_duration_frames"]
-
-    FILENAME = os.path.basename(os.path.splitext(args["video"])[0])
-    logging.info(f"File: {FILENAME}")
-
-    input_w = int(vs.get(cv2.CAP_PROP_FRAME_WIDTH ))
-    input_h = int(vs.get(cv2.CAP_PROP_FRAME_HEIGHT ))
-    frames_count = int(vs.get(cv2.CAP_PROP_FRAME_COUNT))
-    # This value is what the video CLAIMS it is. It is not necessarily the truth.
-    fps = vs.get(cv2.CAP_PROP_FPS)
-    result = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
-                             "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", 
-                             args["video"]],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT)
-    duration = "DISABLED"
-    try:
-        duration = float(result.stdout.splitlines()[-1])
-        # This causes major issues with concating videos. Need to figure out how to merge video and audio
-        fps = frames_count / duration
-    except ValueError:
-        print("Assigned default fps of 30")
-        fps = 30
-
-    logging.info(f"Frames: {frames_count} FPS: {fps} Duration: {duration}s")
-    logging.info(f"Inputs: {input_w}x{input_h} @ {fps} fps")
-
-    mask = None
+class ZoomedClipCreator:
 
     # Returns the mask and the ROI corners
-    def parse_roi_file(roi_filepath, frame):
+    def generate_roi_mask(self, roi_filepath, frame):
         frame = frame.copy()
         canny_mask = np.zeros(frame.shape, dtype=np.uint8)
-        with open(roi_filepath) as f:
-            data = json.load(f)
-            roi_include = data["include"]
-            roi_exclude = data["exclude"]
-            roi_cones = data["conelist"]
-            # We need to generate the INCLUDE mask first, and then exclude onto it.
+
+        roi_include, roi_exclude, roi_cones = parse_roi_file(roi_filepath=roi_filepath)
+        # We need to generate the INCLUDE mask first, and then exclude onto it.
 
         roi_corners = np.array([ roi_include ])
 
@@ -244,522 +132,665 @@ def main(args):
         # canny_mask = cv2.bitwise_and(frame, canny_mask)
         return canny_mask, roi_corners
 
-    # How much to shrink the raw input for analyzing contours
-    ANALYZE_SHRINK_FACTOR = 2
-
-    INPUT_SIZE = (input_w, input_h)
-    OUTPUT_SIZE = (1920, 1080)
-
-    ZOOM_FACTOR = input_w // OUTPUT_SIZE[0]
-    ZOOM_FACTOR2 = ZOOM_FACTOR*ZOOM_FACTOR
-
-    # FORCED_WIDTH = 1920
-    # FORCED_HEIGHT = 1080
-
-    # TODO
-    # Have the zoom-pieces use the shrunken frame (raw_input // 4), but the output video use raw_input // 2 for the zoom factor. Make these factors codeable?
-    if WRITE_VIDEO:
-        # If the file already exists, and we are NOT overwriting existing
-        if os.path.exists(args["output_filename"]) and not args["overwrite_existing"]:
-            print("File already exists, and command line arg '--overwrite_existing' is not specified.")
-            return 1
-        if args.get("output_filename", None):
-            cropped_recording = cv2.VideoWriter(args["output_filename"], cv2.VideoWriter_fourcc(*'MP4V'), fps, (OUTPUT_SIZE[0], OUTPUT_SIZE[1]))
+    # This will persist for the entirety of this clip. The Init() should just prep the clip
+    # Another function should do the actual step through of each frame. Each frame should be processed in another function.
+    def __init__(self, args):
+        # Things in self. should only be ones that carry across frames
+        self.DEBUG = args["debug"]
+        if self.DEBUG:
+            self.SHOW_DEBUG = True
         else:
-            cropped_recording = cv2.VideoWriter(args["video"] + "_canny.mp4", cv2.VideoWriter_fourcc(*'MP4V'), fps, (OUTPUT_SIZE[0], OUTPUT_SIZE[1]))
-    if DEBUG:
-        live_recording = cv2.VideoWriter(args["video"] + "_debug.mp4", cv2.VideoWriter_fourcc(*'MP4V'), fps, (input_w // ANALYZE_SHRINK_FACTOR, input_h // ANALYZE_SHRINK_FACTOR))
+            self.SHOW_DEBUG = args["show_debug"]
 
-    # print(f"Beginning looping @ {datetime.datetime.now()}")
-    logging.info("Beginning looping")
-
-    # This should be set to true if we are moving while outside of the deadzone. 
-    # If the flag is true, we want to continue to move towards the center, until we are within INNER_DEADZONE distance. Then the flag can be reset to False
-    find_inner_deadzone = False
-
-    # loop over the frames of the video
-    while True:
-        # print("LINE")
-        logging.debug(f"Starting New Frame")
-            # print(f"\r{total_count:08d} frames / {int(total_count // fps):04d} seconds", end='')
-        args["skip_starting_frames"] = 0
-        # grab the current frame and initialize the occupied/unoccupied
-        frame = vs.read()
-        frame = frame if args.get("video", None) is None else frame[1]
-        logging.debug(f"Making copies and resizing")
-        # if the frame could not be grabbed, then we have reached the end
-        # of the video
-        if frame is None:
-            break
-
-        
-        # Copy the frame to be used by the cropped segment, to prevent losing any detail
-        cropped = frame.copy()
-        
-        # resize the frame, convert it to grayscale, and blur it
-        # 960 is 1/4 of 4k
-        # frame = imutils.resize(frame, width=960)
-        # 1920 is 1/2 of 4k
-        # Halves the size of the analyzed_frames
-        # print(FORCED_WIDTH, ANALYZE_SHRINK_FACTOR)
-
-        logging.debug(f"Resizing frame")
-        frame = imutils.resize(frame, width=input_w // ANALYZE_SHRINK_FACTOR)
-        
-        logging.debug(f"Done resizing frame")
-        if mask is None:
-            logging.debug("Creating mask")
-            if args.get("roi_filepath", None):
-                mask, roi_corners = parse_roi_file(args["roi_filepath"], frame)
-            else:
-                roi_file = create_roi_from_video(args["video"])
-                mask, roi_corners = parse_roi_file(roi_file, frame)
-            bw_mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
-            # Create a different mask to avoid breaking the one that is re-used on each frame
-            m2 = np.array(mask, dtype=np.float) # .017 secs
-            # Convert to BGR values
-            m2 /= 255.0 # .008 secs
-            # Divide by transparency
-            m2 *= TRANSPARENCY # .008 secs
-            # Create our pure green mask
-            green = np.ones(frame.shape, dtype=np.float)*(0,1,0) # .04 secs
-            logging.debug("Done creating mask")
-
-        logging.debug("Running Canny detection")
-        canny = frame.copy()
-        canny = cv2.Canny(canny, 240, 250)
-        # print(frame)
-        # print(canny.shape)
-        # print(mask.shape)
-        canny = cv2.bitwise_and(canny, bw_mask)
-        logging.debug("Find Dilated Canny contours")
-        # Dilate the image to fill in gaps, then find contours
-        canny_min_x, canny_max_x, canny_min_y, canny_max_y, thresh = find_dilated_canny_contours(canny, input_w, input_h, args)
-
-        # Draw a line from roi_cones[0] to roi_cones[2]
-        # Draws a line on each sideline.
-        # cv2.line(frame, roi_cones[0], roi_cones[1], (255,255,255), 1)
-        # cv2.line(frame, roi_cones[2], roi_cones[3], (255,255,255), 1)
-        # cv2.line(frame, roi_cones[0], roi_cones[2], (255,255,255), 1)
-        # cv2.line(frame, roi_cones[1], roi_cones[3], (255,255,255), 1)
-        # cv2.line(frame, )
-        # Draw the intermediate lines too
-        # Fisheye effect kills this :(
-        # for i in range(0, 7+1):
-        #     cone_top_x = int(roi_cones[0][0] + (roi_cones[1][0] - roi_cones[0][0]) * i/7)
-        #     cone_top_y = int(roi_cones[0][1] + (roi_cones[1][1] - roi_cones[0][1]) * i/7)
-        #     cone_bot_x = int(roi_cones[2][0] + (roi_cones[3][0] - roi_cones[2][0]) * i/7)
-        #     cone_bot_y = int(roi_cones[2][1] + (roi_cones[3][1] - roi_cones[2][1]) * i/7)
-        #     print(cone_top_x, cone_top_y, cone_bot_x, cone_bot_y)
-        #     cv2.line(frame,  (cone_top_x, cone_top_y), (cone_bot_x, cone_bot_y), (255,255,255), 2)
-
-        # sys.exit()
-        # preview = frame.copy()
-
-        # canny_coords = np.where(canny != [0])
-        # # print(type(canny_coords))
-        # canny_min_x = np.amin(canny_coords[1])
-        # canny_max_x = np.amax(canny_coords[1])
-        # canny_min_y = np.amin(canny_coords[0])
-        # canny_max_y = np.amax(canny_coords[0])
-
-        # # Reassign these values to use the "blurred" versions from above
-        # canny_min_x = min_x
-        # canny_max_x = max_x
-        # canny_min_y = min_y
-        # canny_max_y = max_y
-
-        # print(f"({canny_min_x}, {canny_min_y}) / ({canny_max_x}, {canny_max_y})")
-        # frame = cv2.putText(frame, 'Edge Detection bounds in Green', (canny_min_x, canny_min_y-5), cv2.FONT_HERSHEY_DUPLEX, .5, (255,255,255), 2)
-        # frame = cv2.putText(frame, 'Edge Detection bounds in Green', (canny_min_x, canny_min_y-5), cv2.FONT_HERSHEY_DUPLEX, .5, (0,255,0), 1)
-        if DEBUG:
-            logging.debug(f"Draw debug text")
-            frame = draw_debug_text(frame)
-        # If green dot is within "Movement Deadzone", don't move. 
-        # If green box is within "Outer buffer box", don't move.
-        # Else, shift the cropped frame from the white dot towards the green dot.
-
-        # if the first frame is None, initialize it. Also, every 50 frames, reset the comparison image
-        # We need to do a tick-tock - instead of starting fresh each time, use a frame from 1s prior
-
-        # Reset the min/max values IF we detected a new location
-        if canny_min_x is not None:
-            x_min = None
-            y_min = None
-            x_max = None
-            y_max = None
-
-        logging.debug(f"Starting to locate camera-center processing")
-        # If we didn't find any Canny Edges, re-use values from prior
-        if not canny_min_x or total_count % FRAMES_BETWEEN_RE_COMPARE != 0:
-            # print("REUSING OLD CENTER")
-            # print("NO Canny Edges found")
-            # If we had previous values to use, then produce an object from those
-            if DEBUG and center_x and center_y:
-                # Draw a green center-dot where the center of the edges are. This matches the Green Box that defines this point
-                cv2.rectangle(frame, (center_x-1, center_y-1), (center_x+1, center_y+1), (0, 255, 0), 2)
-                # Draw a blue box showing the cropped section
-                cv2.rectangle(frame, (top_x, top_y), (top_x + input_w//ZOOM_FACTOR, top_y + input_h//ZOOM_FACTOR), (255, 0, 0), 2)
-                frame = cv2.putText(frame, 'Cropped frame', (top_x, top_y-5), cv2.FONT_HERSHEY_DUPLEX, .5, (0,0,0), 2)
-                frame = cv2.putText(frame, 'Cropped frame', (top_x, top_y-5), cv2.FONT_HERSHEY_DUPLEX, .5, (255,0,0), 1)
-            # If we did not have previous values to use, write out the full frame. This should only ever occur on the very first frame(s).
-            if not (center_x and center_y):
-                print("WRITING BAD OUTPUT")
-                # raise ValueError("No canny edges detected in frame, and no center yet produced")
-                frame = cv2.resize(frame, (OUTPUT_SIZE[0], OUTPUT_SIZE[1]))
-                # Write the current image to the video file
-                if WRITE_VIDEO:
-                    # Write the clip name on the frame, before sending to file
-                    frame = cv2.putText(frame, FILENAME, (5, OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (0, 0, 0), 3)
-                    frame = cv2.putText(frame, FILENAME, (5, OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (255, 255, 255), 1)
-                    cropped_recording.write(frame)
-                continue
+        if self.DEBUG:
+            logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s %(message)s')
         else:
-            # Get the corners of the contours that were located. x+w, y+h
-            x_min = canny_min_x
-            x_max = canny_max_x
-            y_min = canny_min_y
-            y_max = canny_max_y
-            # print(x_min, x_max, y_min, y_max)
-            # Calculate the center and top_corner values for drawing boxes
-            center_x = (x_max + x_min)//2
-            top_x = max(center_x - (input_w // ZOOM_FACTOR), 0)
-            center_y = (y_max + y_min)//2
-            top_y = max(center_y - (input_h // ZOOM_FACTOR), 0)
-            new_center = [center_x, center_y]
-            # This only triggers on first frame
-            if not old_center:
-                old_center = new_center
+            logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
-            # compare old X to new X
-            # If New is close to Old, don't move at all
-            # IF WE ARE OUTSIDE OF THE BIG DEADZONE... MOVE TO GET INSIDE THE SMALL DEADZONE
-            # find_inner_deadzone is set to True if we are seeking the inner_deadzone
-            # this could (should?) be a function
-            # Inputs: find_inner_deadzone flag, old_center, new_center
-            # Outputs: find_inner_deadzone flag, new_center
+        logging.info("Beginning clip")
 
-            # 1) Are we near the center? If yes, stay there
-            if not find_inner_deadzone:
-                if abs(old_center[0] - new_center[0]) < DEADZONE_X:
-                    new_center[0] = old_center[0]
-                else:
-                    find_inner_deadzone = True
-                    # print("DEADZONE FLAG SET TO TRUE")
-                # compare old Y to new Y
-                if abs(old_center[1] - new_center[1]) < DEADZONE_Y:
-                    new_center[1] = old_center[1]
-            # This is not an else statement so that if we trigger it above, then we immediately begin to shift to fix it
-            if find_inner_deadzone:
-                # print("DEADZONE FLAG CURRENTLY TRUE")
-                if abs(old_center[0] - new_center[0]) < INNER_DEADZONE_X:
-                    new_center[0] = old_center[0]
-                    find_inner_deadzone = False
-                    # print("DEADZONE FLAG SET TO FALSE")
-                # compare old Y to new Y
-                if abs(old_center[1] - new_center[1]) < DEADZONE_Y:
-                    new_center[1] = old_center[1]
-            # If all of our edges are well-within the buffers, don't move the camera at all. Here we generate the buffers based on where the old_center was.
-            # If new_center is still inside this, don't shift
+        # if the video argument is None, then we are reading from webcam
+        if args.get("video", None) is None:
+            raise NotImplemented
+            self.vs = VideoStream(src=0).start()
+            time.sleep(2.0)
+        # otherwise, we are reading from a video file
+        else:
+            self.vs = cv2.VideoCapture(args["video"])
+        # initialize the first frame in the video stream
+        self.firstFrame = None
+        self.next = None
 
-            # 2) Are we well inside the frame? If yes, stay there
-            left_buffer = (old_center[0] - INPUT_SIZE[0]//ANALYZE_SHRINK_FACTOR//ZOOM_FACTOR2 + OUTER_BOUND_BUFFER_X)
-            right_buffer = (old_center[0] + INPUT_SIZE[0]//ANALYZE_SHRINK_FACTOR//ZOOM_FACTOR2 - OUTER_BOUND_BUFFER_X)
-            top_buffer = (old_center[1] - INPUT_SIZE[1]//ANALYZE_SHRINK_FACTOR//ZOOM_FACTOR2 + OUTER_BOUND_BUFFER_Y)
-            bottom_buffer = (old_center[1] + INPUT_SIZE[1]//ANALYZE_SHRINK_FACTOR//ZOOM_FACTOR2 - OUTER_BOUND_BUFFER_Y)
-            # print(new_center, OUTPUT_SIZE, OUTER_BOUND_BUFFER_X, OUTER_BOUND_BUFFER_Y)
-            # print(left_buffer, right_buffer, top_buffer, bottom_buffer)
-            # Check if we are already staying in place
-            # Currently DISABLED for testing.
-            if False:
-                if new_center != old_center:
-                    # If x_values are between the buffers, then don't move
-                    if x_min > left_buffer and x_max < right_buffer:
-                        # print("X between buffers, not moving")
-                        new_center[0] = old_center[0]
-            # To calculate Zoom, we want to get x_max - x_min. If that value is larger than our Crop target, then we need to zoom out some.
+        self.team_one = None
+        self.team_one_score = None
+        self.team_two = None
+        self.team_two_score = None
 
-            # cropped = cv2.putText(cropped, FILENAME, (5, OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (0, 0, 0), 3)
-            # cropped = cv2.putText(cropped, FILENAME, (5, OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (255, 255, 255), 1)
-            
-            # TODO add an outer deadzone. "If the objects detected are well within the bounds, don't move at all. "
-            # Limit movement to MAX_PIXEL_MOVEMENT_X/Y pixels
+        if args.get("team_one_file", None) is not None:
+            self.team_one = Team(args.get("team_one_file"))
+        if args.get("team_one_score", None) is not None:
+            self.team_one_score = args.get("team_one_score", None)
+        if args.get("team_two_file", None) is not None:
+            self.team_two = Team(args.get("team_two_file"))
+        if args.get("team_two_score", None) is not None:
+            self.team_two_score = args.get("team_two_score", None)
+        # Initialize vars
+        self.count = 0
+        self.total_count = 0
 
-            # 3) Are we moving? Okay, only move _this_ quickly
-            # compare old X to new X
+        self.center_x = None
+        self.center_y = None
+        self.top_x = None
+        self.top_y = None
 
-            # print(old_center, new_center)
-            # speed = get_new_momentum(speed, old_center[0] - new_center[0])
-            # if speed > MAX_PIXEL_MOVEMENT_X:
-            #     speed = MAX_PIXEL_MOVEMENT_X
-            # print(speed)
+        self.smooth_top_x = None
+        self.smooth_top_y = None
 
-            if abs(old_center[0] - new_center[0]) > MAX_PIXEL_MOVEMENT_X:
-                # If we are moving to the left, set the new center LEFT by speed
-                if old_center[0] > new_center[0]:
-                    new_center[0] = old_center[0] - MAX_PIXEL_MOVEMENT_X
-                # Otherwise, set the new center RIGHT by speed
-                else:
-                    new_center[0] = old_center[0] + MAX_PIXEL_MOVEMENT_X
+        self.new_center = None
+        self.old_center = None
 
-            # compare old Y to new Y
-            if abs(old_center[1] - new_center[1]) > MAX_PIXEL_MOVEMENT_Y:
-                if old_center[1] > new_center[1]:
-                    new_center[1] = old_center[1] - MAX_PIXEL_MOVEMENT_Y
-                else:
-                    new_center[1] = old_center[1] + MAX_PIXEL_MOVEMENT_Y
+        self.speed = 0
 
-            smooth_top_x = 1
-            # smooth_top_x = max(new_center[0] - (FORCED_WIDTH // ZOOM_FACTOR2), 0)
-            # smooth_top_y = max(new_center[1] - (FORCED_HEIGHT // ZOOM_FACTOR2), 0)
-            # print("NEW CENTER", new_center)
+        # Maximum movement speed of the cropped zone per frame.
+        self.MAX_PIXEL_MOVEMENT_X = args["max_camera_movement_x"]
+        # MAX_PIXEL_MOVEMENT_X = 10
+        self.MAX_PIXEL_MOVEMENT_Y = args["max_camera_movement_x"]
 
-            # If the bounds are still within our frame, don't move at all
-            if PREVENT_PAN_WHILE_BOUNDED:
-                if x_max < smooth_top_x + input_w//ZOOM_FACTOR and x_min > smooth_top_x:
-                    # print("STILL WITHIN THE PREVIOUS BOX X")
-                    new_center[0] = old_center[0]
-                if y_max < smooth_top_y + input_h//ZOOM_FACTOR and y_min > smooth_top_y:
-                    # print("STILL WITHIN THE PREVIOUS BOX Y")
-                    new_center[1] = old_center[1]
-                if x_max < top_x + input_w//ZOOM_FACTOR and x_min > top_x:
-                    # print("STILL WITHIN THE PREVIOUS BOX X")
-                    new_center[0] = old_center[0]
-                if y_max < top_y + input_h//ZOOM_FACTOR and y_min > top_y:
-                    # print("STILL WITHIN THE PREVIOUS BOX Y")
-                    new_center[1] = old_center[1]
-                # If all the bounds are still inside our box, don't move at all
+        # Transparency level
+        self.TRANSPARENCY = .3
 
-        # Once we have determined a target point, begin to show the preview and write to a file
-        if True: # smooth_top_x is not None:
+        # Deadzone where the camera doesn't move at all, as long as the center is still within that many pixels.
+        self.DEADZONE_X = args["deadzone_x"]
+        self.DEADZONE_Y = args["deadzone_y"]
+        self.INNER_DEADZONE_X = self.DEADZONE_X // 2
+        self.INNER_DEADZONE_Y = self.DEADZONE_Y // 2
+        self.OUTER_BOUND_BUFFER_X = args["outer_bound_buffer_x"]
+        self.OUTER_BOUND_BUFFER_Y = args["outer_bound_buffer_y"]
 
-            # Draw a smoothed-pan center point
-            # THIS VALUE IS CORRECT
 
-            # print(center_x, center_y, top_x, top_y)
-            # Draw a 1920x1080 box with the center as the center of the contours, with edge-safety
-            # cv2.rectangle(frame, (top_x, top_y), (top_x + FORCED_WIDTH//(ZOOM_FACTOR * ANALYZE_SHRINK_FACTOR), top_y + FORCED_HEIGHT//(ZOOM_FACTOR * ANALYZE_SHRINK_FACTOR)), (255, 0, 0), 2)
+        # This value defines if the crop should attempt to keep the video centered on the boxes, or simply stop moving if all the boxes are still inside the crop.
+        self.PREVENT_PAN_WHILE_BOUNDED = False
+        # Flag to disable writing video
+        self.WRITE_VIDEO = args["write"]
+        # Not implemented. How much time would it save us if we only re-calculated the "new-center" every 5 frames, rather than every single frame?
+        self.FRAMES_BETWEEN_RE_COMPARE = 1
+        self.MAX_PIXEL_MOVEMENT_X *= self.FRAMES_BETWEEN_RE_COMPARE
+        self.MAX_PIXEL_MOVEMENT_Y *= self.FRAMES_BETWEEN_RE_COMPARE
+        # This flag defines if we are still in the "slow-zoom" phase of a clip.
+        # Does this need to be a counter? Let's do that for now, for flexibility
+        self.ZOOM_IN_DURATION_FRAMES = args["zoomin_duration_frames"]
 
-            # Cropped stuff goes very-very last. Everything prior to this should use local-scaling
-            
-            ######
-            # new_center is ACCURATE, for the preview image.
-            ######
+        self.FILENAME = os.path.basename(os.path.splitext(args["video"])[0])
+        logging.info(f"File: {self.FILENAME}")
 
-            # This code is an attempt to "zoom out" to capture all objects - but it doesn't work well
-            crop_width = 2*(x_max - x_min)
-            crop_height = 2*(y_max - y_min)
-            if True: # or crop_width < OUTPUT_SIZE[0]:
-                crop_width = OUTPUT_SIZE[0]
-                crop_height = OUTPUT_SIZE[1]
+        self.input_w = int(self.vs.get(cv2.CAP_PROP_FRAME_WIDTH ))
+        self.input_h = int(self.vs.get(cv2.CAP_PROP_FRAME_HEIGHT ))
+        self.frames_count = int(self.vs.get(cv2.CAP_PROP_FRAME_COUNT))
+        # This value is what the video CLAIMS it is. It is not necessarily the truth.
+        self.fps = self.vs.get(cv2.CAP_PROP_FPS)
+        result = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
+                                "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", 
+                                args["video"]],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT)
+        self.duration = "DISABLED"
+        try:
+            self.duration = float(result.stdout.splitlines()[-1])
+            # This causes major issues with concating videos. Need to figure out how to merge video and audio
+            self.fps = self.frames_count / self.duration
+        except ValueError:
+            print("Assigned default fps of 30")
+            self.fps = 30
+
+        logging.info(f"Frames: {self.frames_count} FPS: {self.fps} Duration: {self.duration}s")
+        logging.info(f"Inputs: {self.input_w}x{self.input_h} @ {self.fps} fps")
+
+        self.mask = None
+
+
+
+        # How much to shrink the raw input for analyzing contours
+        self.ANALYZE_SHRINK_FACTOR = 2
+
+        self.INPUT_SIZE = (self.input_w, self.input_h)
+        self.OUTPUT_SIZE = (1920, 1080)
+
+        self.ZOOM_FACTOR = self.input_w // self.OUTPUT_SIZE[0]
+        # The self.Zoom_factor squared
+        self.ZOOM_FACTOR2 = self.ZOOM_FACTOR*self.ZOOM_FACTOR
+
+        # FORCED_WIDTH = 1920
+        # FORCED_HEIGHT = 1080
+
+        # TODO
+        # Have the zoom-pieces use the shrunken frame (raw_input // 4), but the output video use raw_input // 2 for the zoom factor. Make these factors codeable?
+        if self.WRITE_VIDEO:
+            # If the file already exists, and we are NOT overwriting existing
+            if os.path.exists(args["output_self.filename"]) and not args["overwrite_existing"]:
+                print("File already exists, and command line arg '--overwrite_existing' is not specified.")
+                return 1
+            if args.get("output_filename", None):
+                self.cropped_recording = cv2.VideoWriter(args["output_self.filename"], cv2.VideoWriter_fourcc(*'MP4V'), self.fps, (self.OUTPUT_SIZE[0], self.OUTPUT_SIZE[1]))
             else:
-                crop_height = crop_width * 9 // 16
+                self.cropped_recording = cv2.VideoWriter(args["video"] + "_canny.mp4", cv2.VideoWriter_fourcc(*'MP4V'), self.fps, (self.OUTPUT_SIZE[0], self.OUTPUT_SIZE[1]))
+        if self.DEBUG:
+            self.live_recording = cv2.VideoWriter(args["video"] + "_debug.mp4", cv2.VideoWriter_fourcc(*'MP4V'), self.fps, (self.input_w // self.ANALYZE_SHRINK_FACTOR, self.input_h // self.ANALYZE_SHRINK_FACTOR))
 
-            # 4) Adjust based on the offset_x and offset_y arguments
-            new_center[0] += args["offset_x"]
-            new_center[1] += args["offset_y"]
-            # OUTPUT_SIZE 0 and 1 should be replaced with the new value of "zoom_target width and height"
-            # tl, br = find_center_within_bounds(new_center[0], new_center[1], max(x_max - x_min, OUTPUT_SIZE[0]), max(y_max - y_min, OUTPUT_SIZE[1]), INPUT_SIZE[0], INPUT_SIZE[1])
-            # 5) Ensure we aren't off the screen to the left
-            cropped_x1 = max((ANALYZE_SHRINK_FACTOR * new_center[0]) - crop_width // 2, 0)
-            # Ensure we aren't off the screen to the right
-            cropped_x1 = min((cropped_x1, input_w - crop_width))
-            # cropped_x2 = min((ZOOM_FACTOR * ANALYZE_SHRINK_FACTOR * new_center[0]) + OUTPUT_SIZE[0] // 2, 3840)
-            cropped_x2 = cropped_x1 + crop_width
+        # print(f"Beginning looping @ {datetime.datetime.now()}")
+        logging.info("Beginning looping")
 
-            # Ensure we aren't off the screen to the top
-            cropped_y1 = max((ANALYZE_SHRINK_FACTOR * new_center[1]) - crop_height // 2, 0)
-            # Ensure we aren't off the screen to the bottom
-            cropped_y1 = min((cropped_y1, input_h - crop_height))
-            cropped_y2 = cropped_y1 + crop_height
+        # This should be set to true if we are moving while outside of the deadzone. 
+        # If the flag is true, we want to continue to move towards the center, until we are within INNER_DEADZONE distance. Then the flag can be reset to False
+        self.find_inner_deadzone = False
+
+        self.process_video()
+
+    def process_video(self):
+        # loop over the frames of the video
+        while True:
+            # print("LINE")
+            logging.debug(f"Starting New Frame")
+                # print(f"\r{total_count:08d} frames / {int(total_count // fps):04d} seconds", end='')
+            args["skip_starting_frames"] = 0
+            # grab the current frame and initialize the occupied/unoccupied
+            self.frame = self.vs.read()
+            self.frame = self.frame if args.get("video", None) is None else self.frame[1]
+            logging.debug(f"Making copies and resizing")
+            # if the frame could not be grabbed, then we have reached the end
+            # of the video
+            if self.frame is None:
+                break
+
             
-            # print(cropped_x1, cropped_y1, cropped_x2, cropped_y2)
-            # cropped_y2 = min((ZOOM_FACTOR * ANALYZE_SHRINK_FACTOR * new_center[1]) + OUTPUT_SIZE[1] // 2, 2160)
-            # cropped_x = int(smooth_top_x * ZOOM_FACTOR * ANALYZE_SHRINK_FACTOR)
-            # cropped_y = int(smooth_top_y * ZOOM_FACTOR * ANALYZE_SHRINK_FACTOR)
-            # print(smooth_top_x, smooth_top_y, ZOOM_FACTOR, ANALYZE_SHRINK_FACTOR)
-
-
-            # Basically, we define a zoom_time. This will give time for the pull to occur etc.
-            # While the frame_count is less than ... 300 frames? (10 seconds)
-            # We want to do a progressive zoom. We will need to specify the size of the box to be cropped (last line before writing to the video)
-            # This should use a similar formula to now, just the values need to be modified IF zoomed_frame_count < 300
-            # cropped_x1 needs to halve the distance from 0 -> cropped_x1 ->>> Formula could be... 
-            # Calc the distance from the boundary. distance = abs(cropped_XY - {0 OR INPUT_WIDTH[01]})
-            # current_bound_x1 = (total_count / ZOOM_IN_DURATION_FRAMES) * distance_x1. We are shrinking $distance by the percent of ZOOM_IN_DURATION_FRAMES we have
-            # current_bound_x2 = INPUT_WIDTH - ((total_count / ZOOM_IN_DURATION_FRAMES) * distance_x2)
-            # cropped_x1 = cropped_x1 - current_bound_x1
-            # cropped_y1 needs to halve the distance from 0 -> cropped_y1
-            # cropped_x2 needs to be larger, towards the 4k bound (3840?) INPUT_WIDTH[0]
-            # cropped_y2 needs to be larger, towards the 4k bound (2160?) INPUT_WIDTH[1]
-            # And then resize it to OUTPUT_SIZE[0]
-            # A linear scaling. We might want to make this do a quicker zoom initially, and then slow down as it approaches. Log-scale?
-            if ZOOM_IN_DURATION_FRAMES == -1 or (total_count > 0 and total_count < ZOOM_IN_DURATION_FRAMES):
-                percent_from_edge = 1 - (total_count / ZOOM_IN_DURATION_FRAMES)
-                if ZOOM_IN_DURATION_FRAMES == -1:
-                    percent_from_edge = 1
-                # print(percent_to_edge)
-                cropped_x1 = int(cropped_x1 - (percent_from_edge * cropped_x1))
-                cropped_y1 = int(cropped_y1 - (percent_from_edge * cropped_y1))
-
-                cropped_x2 = int(cropped_x2 + (percent_from_edge * abs(input_w - cropped_x2)))
-                cropped_y2 = int(cropped_y2 + (percent_from_edge * abs(input_h - cropped_y2)))
-                pass
+            # Copy the frame to be used by the cropped segment, to prevent losing any detail
+            self.cropped = self.frame.copy()
             
-            # Draws the crop-preview box
-            if SHOW_DEBUG:
+            # resize the frame, convert it to grayscale, and blur it
+            # 960 is 1/4 of 4k
+            # frame = imutils.resize(frame, width=960)
+            # 1920 is 1/2 of 4k
+            # Halves the size of the analyzed_frames
+            # print(FORCED_WIDTH, ANALYZE_SHRINK_FACTOR)
+
+            logging.debug(f"Resizing frame")
+            self.frame = imutils.resize(self.frame, width=self.input_w // self.ANALYZE_SHRINK_FACTOR)
+            
+            logging.debug(f"Done resizing frame")
+            # Create the mask, this should only be done once
+            # TODO this should be a separate function
+            if self.mask is None:
+                logging.debug("Creating mask")
+                if args.get("roi_filepath", None):
+                    self.mask, self.roi_corners = self.generate_roi_mask(args["roi_filepath"], self.frame)
+                else:
+                    roi_file = create_roi_from_video(args["video"])
+                    self.mask, self.roi_corners = self.generate_roi_mask(roi_file, self.frame)
+                bw_mask = cv2.cvtColor(self.mask, cv2.COLOR_BGR2GRAY)
+                # Create a different mask to avoid breaking the one that is re-used on each frame
+                m2 = np.array(self.mask, dtype=np.float) # .017 secs
+                # Convert to BGR values
+                m2 /= 255.0 # .008 secs
+                # Divide by transparency
+                m2 *= self.TRANSPARENCY # .008 secs
+                # Create our pure green mask
+                self.green = np.ones(self.frame.shape, dtype=np.float)*(0,1,0) # .04 secs
+                logging.debug("Done creating mask")
+
+            logging.debug("Running Canny detection")
+            self.canny = self.frame.copy()
+            self.canny = cv2.Canny(self.canny, 240, 250)
+            # print(frame)
+            # print(canny.shape)
+            # print(mask.shape)
+            self.canny = cv2.bitwise_and(self.canny, bw_mask)
+            logging.debug("Find Dilated Canny contours")
+            # Dilate the image to fill in gaps, then find contours
+            canny_min_x, canny_max_x, canny_min_y, canny_max_y, thresh = find_dilated_canny_contours(self.canny, self.input_w, self.input_h, args)
+
+            # Draw a line from roi_cones[0] to roi_cones[2]
+            # Draws a line on each sideline.
+            # cv2.line(frame, roi_cones[0], roi_cones[1], (255,255,255), 1)
+            # cv2.line(frame, roi_cones[2], roi_cones[3], (255,255,255), 1)
+            # cv2.line(frame, roi_cones[0], roi_cones[2], (255,255,255), 1)
+            # cv2.line(frame, roi_cones[1], roi_cones[3], (255,255,255), 1)
+            # cv2.line(frame, )
+            # Draw the intermediate lines too
+            # Fisheye effect kills this :(
+            # for i in range(0, 7+1):
+            #     cone_top_x = int(roi_cones[0][0] + (roi_cones[1][0] - roi_cones[0][0]) * i/7)
+            #     cone_top_y = int(roi_cones[0][1] + (roi_cones[1][1] - roi_cones[0][1]) * i/7)
+            #     cone_bot_x = int(roi_cones[2][0] + (roi_cones[3][0] - roi_cones[2][0]) * i/7)
+            #     cone_bot_y = int(roi_cones[2][1] + (roi_cones[3][1] - roi_cones[2][1]) * i/7)
+            #     print(cone_top_x, cone_top_y, cone_bot_x, cone_bot_y)
+            #     cv2.line(frame,  (cone_top_x, cone_top_y), (cone_bot_x, cone_bot_y), (255,255,255), 2)
+
+            # sys.exit()
+            # preview = frame.copy()
+
+            # canny_coords = np.where(canny != [0])
+            # # print(type(canny_coords))
+            # canny_min_x = np.amin(canny_coords[1])
+            # canny_max_x = np.amax(canny_coords[1])
+            # canny_min_y = np.amin(canny_coords[0])
+            # canny_max_y = np.amax(canny_coords[0])
+
+            # # Reassign these values to use the "blurred" versions from above
+            # canny_min_x = min_x
+            # canny_max_x = max_x
+            # canny_min_y = min_y
+            # canny_max_y = max_y
+
+            # print(f"({canny_min_x}, {canny_min_y}) / ({canny_max_x}, {canny_max_y})")
+            # frame = cv2.putText(frame, 'Edge Detection bounds in Green', (canny_min_x, canny_min_y-5), cv2.FONT_HERSHEY_DUPLEX, .5, (255,255,255), 2)
+            # frame = cv2.putText(frame, 'Edge Detection bounds in Green', (canny_min_x, canny_min_y-5), cv2.FONT_HERSHEY_DUPLEX, .5, (0,255,0), 1)
+            if self.DEBUG:
+                logging.debug(f"Draw debug text")
+                self.frame = draw_debug_text(self.frame)
+            # If green dot is within "Movement Deadzone", don't move. 
+            # If green box is within "Outer buffer box", don't move.
+            # Else, shift the cropped frame from the white dot towards the green dot.
+
+            # if the first frame is None, initialize it. Also, every 50 frames, reset the comparison image
+            # We need to do a tick-tock - instead of starting fresh each time, use a frame from 1s prior
+
+            # Reset the min/max values IF we detected a new location
+            if canny_min_x is not None:
+                x_min = None
+                y_min = None
+                x_max = None
+                y_max = None
+
+            logging.debug(f"Starting to locate camera-center processing")
+            # If we didn't find any Canny Edges, re-use values from prior
+            if not canny_min_x or self.total_count % self.FRAMES_BETWEEN_RE_COMPARE != 0:
+                # print("REUSING OLD CENTER")
+                # print("NO Canny Edges found")
+                # If we had previous values to use, then produce an object from those
+                if self.DEBUG and center_x and center_y:
+                    # Draw a green center-dot where the center of the edges are. This matches the Green Box that defines this point
+                    cv2.rectangle(self.frame, (center_x-1, center_y-1), (center_x+1, center_y+1), (0, 255, 0), 2)
+                    # Draw a blue box showing the cropped section
+                    cv2.rectangle(self.frame, (top_x, top_y), (top_x + self.input_w//self.ZOOM_FACTOR, top_y + self.input_h//self.ZOOM_FACTOR), (255, 0, 0), 2)
+                    self.frame = cv2.putText(self.frame, 'Cropped frame', (top_x, top_y-5), cv2.FONT_HERSHEY_DUPLEX, .5, (0,0,0), 2)
+                    self.frame = cv2.putText(self.frame, 'Cropped frame', (top_x, top_y-5), cv2.FONT_HERSHEY_DUPLEX, .5, (255,0,0), 1)
+                # If we did not have previous values to use, write out the full frame. This should only ever occur on the very first frame(s).
+                if not (center_x and center_y):
+                    print("WRITING BAD OUTPUT")
+                    # raise ValueError("No canny edges detected in frame, and no center yet produced")
+                    self.frame = cv2.resize(self.frame, (self.OUTPUT_SIZE[0], self.OUTPUT_SIZE[1]))
+                    # Write the current image to the video file
+                    if self.WRITE_VIDEO:
+                        # Write the clip name on the frame, before sending to file
+                        self.frame = cv2.putText(self.frame, self.FILENAME, (5, self.OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (0, 0, 0), 3)
+                        self.frame = cv2.putText(self.frame, self.FILENAME, (5, self.OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (255, 255, 255), 1)
+                        self.cropped_recording.write(self.frame)
+                    continue
+            else:
+                # Get the corners of the contours that were located. x+w, y+h
+                x_min = canny_min_x
+                x_max = canny_max_x
+                y_min = canny_min_y
+                y_max = canny_max_y
+                # print(x_min, x_max, y_min, y_max)
+                # Calculate the center and top_corner values for drawing boxes
+                center_x = (x_max + x_min)//2
+                top_x = max(center_x - (self.input_w // self.ZOOM_FACTOR), 0)
+                center_y = (y_max + y_min)//2
+                top_y = max(center_y - (self.input_h // self.ZOOM_FACTOR), 0)
+                self.new_center = [center_x, center_y]
+                # This only triggers on first frame
+                if not self.old_center:
+                    self.old_center = self.new_center
+
+                # compare old X to new X
+                # If New is close to Old, don't move at all
+                # IF WE ARE OUTSIDE OF THE BIG DEADZONE... MOVE TO GET INSIDE THE SMALL DEADZONE
+                # find_inner_deadzone is set to True if we are seeking the inner_deadzone
+                # this could (should?) be a function
+                # Inputs: find_inner_deadzone flag, old_center, new_center
+                # Outputs: find_inner_deadzone flag, new_center
+
+                # 1) Are we near the center? If yes, stay there
+
+
+
+
+
+                # TODO this should all be 1 function 
+
+
+
+
+                if not self.find_inner_deadzone:
+                    if abs(self.old_center[0] - self.new_center[0]) < self.DEADZONE_X:
+                        self.new_center[0] = self.old_center[0]
+                    else:
+                        self.find_inner_deadzone = True
+                        # print("DEADZONE FLAG SET TO TRUE")
+                    # compare old Y to new Y
+                    if abs(self.old_center[1] - self.new_center[1]) < self.DEADZONE_Y:
+                        self.new_center[1] = self.old_center[1]
+                # This is NOT an else statement so that if we trigger it above, then we immediately begin to shift to fix it
+                if self.find_inner_deadzone:
+                    # print("DEADZONE FLAG CURRENTLY TRUE")
+                    if abs(self.old_center[0] - self.new_center[0]) < self.INNER_DEADZONE_X:
+                        self.new_center[0] = self.old_center[0]
+                        self.find_inner_deadzone = False
+                        # print("DEADZONE FLAG SET TO FALSE")
+                    # compare old Y to new Y
+                    if abs(self.old_center[1] - self.new_center[1]) < self.DEADZONE_Y:
+                        self.new_center[1] = self.old_center[1]
+                # If all of our edges are well-within the buffers, don't move the camera at all. Here we generate the buffers based on where the old_center was.
+                # If new_center is still inside this, don't shift
+
+                # 2) Are we well inside the frame? If yes, stay there
+                left_buffer = (self.old_center[0] - self.INPUT_SIZE[0]//self.ANALYZE_SHRINK_FACTOR//self.ZOOM_FACTOR2 + self.OUTER_BOUND_BUFFER_X)
+                right_buffer = (self.old_center[0] + self.INPUT_SIZE[0]//self.ANALYZE_SHRINK_FACTOR//self.ZOOM_FACTOR2 - self.OUTER_BOUND_BUFFER_X)
+                top_buffer = (self.old_center[1] - self.INPUT_SIZE[1]//self.ANALYZE_SHRINK_FACTOR//self.ZOOM_FACTOR2 + self.OUTER_BOUND_BUFFER_Y)
+                bottom_buffer = (self.old_center[1] + self.INPUT_SIZE[1]//self.ANALYZE_SHRINK_FACTOR//self.ZOOM_FACTOR2 - self.OUTER_BOUND_BUFFER_Y)
+                # print(new_center, self.OUTPUT_SIZE, OUTER_BOUND_BUFFER_X, OUTER_BOUND_BUFFER_Y)
+                # print(left_buffer, right_buffer, top_buffer, bottom_buffer)
+                # Check if we are already staying in place
+                # Currently DISABLED for testing.
+                if False:
+                    if new_center != old_center:
+                        # If x_values are between the buffers, then don't move
+                        if x_min > left_buffer and x_max < right_buffer:
+                            # print("X between buffers, not moving")
+                            new_center[0] = old_center[0]
+                # To calculate Zoom, we want to get x_max - x_min. If that value is larger than our Crop target, then we need to zoom out some.
+
+                # cropped = cv2.putText(cropped, self.FILENAME, (5, self.OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (0, 0, 0), 3)
+                # cropped = cv2.putText(cropped, self.FILENAME, (5, self.OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (255, 255, 255), 1)
+                
+                # TODO add an outer deadzone. "If the objects detected are well within the bounds, don't move at all. "
+                # Limit movement to MAX_PIXEL_MOVEMENT_X/Y pixels
+
+                # 3) Are we moving? Okay, only move _this_ quickly
+                # compare old X to new X
+
+                # print(old_center, new_center)
+                # speed = get_new_momentum(speed, old_center[0] - new_center[0])
+                # if speed > MAX_PIXEL_MOVEMENT_X:
+                #     speed = MAX_PIXEL_MOVEMENT_X
+                # print(speed)
+
+                if abs(self.old_center[0] - self.new_center[0]) > self.MAX_PIXEL_MOVEMENT_X:
+                    # If we are moving to the left, set the new center LEFT by speed
+                    if self.old_center[0] > self.new_center[0]:
+                        self.new_center[0] = self.old_center[0] - self.MAX_PIXEL_MOVEMENT_X
+                    # Otherwise, set the new center RIGHT by speed
+                    else:
+                        self.new_center[0] = self.old_center[0] + self.MAX_PIXEL_MOVEMENT_X
+
+                # compare old Y to new Y
+                if abs(self.old_center[1] - self.new_center[1]) > self.MAX_PIXEL_MOVEMENT_Y:
+                    if self.old_center[1] > self.new_center[1]:
+                        self.new_center[1] = self.old_center[1] - self.MAX_PIXEL_MOVEMENT_Y
+                    else:
+                        self.new_center[1] = self.old_center[1] + self.MAX_PIXEL_MOVEMENT_Y
+
+                smooth_top_x = 1
+                # smooth_top_x = max(new_center[0] - (FORCED_WIDTH // self.ZOOM_FACTOR2), 0)
+                # smooth_top_y = max(new_center[1] - (FORCED_HEIGHT // self.ZOOM_FACTOR2), 0)
+                # print("NEW CENTER", new_center)
+
+                # If the bounds are still within our frame, don't move at all
+                if self.PREVENT_PAN_WHILE_BOUNDED:
+                    if x_max < smooth_top_x + self.input_w//self.ZOOM_FACTOR and x_min > smooth_top_x:
+                        # print("STILL WITHIN THE PREVIOUS BOX X")
+                        self.new_center[0] = self.old_center[0]
+                    if y_max < self.smooth_top_y + self.input_h//self.ZOOM_FACTOR and y_min > self.smooth_top_y:
+                        # print("STILL WITHIN THE PREVIOUS BOX Y")
+                        self.new_center[1] = self.old_center[1]
+                    if x_max < top_x + self.input_w//self.ZOOM_FACTOR and x_min > top_x:
+                        # print("STILL WITHIN THE PREVIOUS BOX X")
+                        self.new_center[0] = self.old_center[0]
+                    if y_max < top_y + self.input_h//self.ZOOM_FACTOR and y_min > top_y:
+                        # print("STILL WITHIN THE PREVIOUS BOX Y")
+                        self.new_center[1] = self.old_center[1]
+                    # If all the bounds are still inside our box, don't move at all
+
+
+
+
+                # TODO until here, should be 1 function. Take in Old_Center, calculate New_Center based on internal parameters
+
+
+
+
+
+            # Once we have determined a target point, begin to show the preview and write to a file
+            if True: # smooth_top_x is not None:
+
+                # Draw a smoothed-pan center point
+                # THIS VALUE IS CORRECT
+
+                # print(center_x, center_y, top_x, top_y)
+                # Draw a 1920x1080 box with the center as the center of the contours, with edge-safety
+                # cv2.rectangle(frame, (top_x, top_y), (top_x + FORCED_WIDTH//(self.ZOOM_FACTOR * ANALYZE_SHRINK_FACTOR), top_y + FORCED_HEIGHT//(self.ZOOM_FACTOR * ANALYZE_SHRINK_FACTOR)), (255, 0, 0), 2)
+
+                # Cropped stuff goes very-very last. Everything prior to this should use local-scaling
+                
+                ######
+                # new_center is ACCURATE, for the preview image.
+                ######
+
+                # This code is an attempt to "zoom out" to capture all objects - but it doesn't work well (...or at all)
+                crop_width = 2*(x_max - x_min)
+                crop_height = 2*(y_max - y_min)
+                if True: # or crop_width < self.OUTPUT_SIZE[0]:
+                    crop_width = self.OUTPUT_SIZE[0]
+                    crop_height = self.OUTPUT_SIZE[1]
+                else:
+                    crop_height = crop_width * 9 // 16
+
+                # 4) Adjust based on the offset_x and offset_y arguments
+                self.new_center[0] += args["offset_x"]
+                self.new_center[1] += args["offset_y"]
+                # self.OUTPUT_SIZE 0 and 1 should be replaced with the new value of "zoom_target width and height"
+                # tl, br = find_center_within_bounds(new_center[0], new_center[1], max(x_max - x_min, self.OUTPUT_SIZE[0]), max(y_max - y_min, self.OUTPUT_SIZE[1]), INPUT_SIZE[0], INPUT_SIZE[1])
+                # 5) Ensure we aren't off the screen to the left
+                cropped_x1 = max((self.ANALYZE_SHRINK_FACTOR * self.new_center[0]) - crop_width // 2, 0)
+                # Ensure we aren't off the screen to the right
+                cropped_x1 = min((cropped_x1, self.input_w - crop_width))
+                # cropped_x2 = min((self.ZOOM_FACTOR * ANALYZE_SHRINK_FACTOR * new_center[0]) + self.OUTPUT_SIZE[0] // 2, 3840)
+                cropped_x2 = cropped_x1 + crop_width
+
+                # Ensure we aren't off the screen to the top
+                cropped_y1 = max((self.ANALYZE_SHRINK_FACTOR * self.new_center[1]) - crop_height // 2, 0)
+                # Ensure we aren't off the screen to the bottom
+                cropped_y1 = min((cropped_y1, self.input_h - crop_height))
+                cropped_y2 = cropped_y1 + crop_height
+                
                 # print(cropped_x1, cropped_y1, cropped_x2, cropped_y2)
-                # Draw the cropping box in blue
-                cv2.rectangle(frame, (cropped_x1 // ZOOM_FACTOR, cropped_y1 // ZOOM_FACTOR), (cropped_x2 // ZOOM_FACTOR, cropped_y2 // ZOOM_FACTOR), (255, 0, 0), 1)
-                frame = cv2.putText(frame, 'Cropped frame', (cropped_x1 // ZOOM_FACTOR, cropped_y1 // ZOOM_FACTOR - 5), cv2.FONT_HERSHEY_DUPLEX, .5, (0,0,0), 2)
-                frame = cv2.putText(frame, 'Cropped frame', (cropped_x1 // ZOOM_FACTOR, cropped_y1 // ZOOM_FACTOR - 5), cv2.FONT_HERSHEY_DUPLEX, .5, (255,0,0), 1)
+                # cropped_y2 = min((self.ZOOM_FACTOR * ANALYZE_SHRINK_FACTOR * new_center[1]) + self.OUTPUT_SIZE[1] // 2, 2160)
+                # cropped_x = int(smooth_top_x * self.ZOOM_FACTOR * ANALYZE_SHRINK_FACTOR)
+                # cropped_y = int(smooth_top_y * self.ZOOM_FACTOR * ANALYZE_SHRINK_FACTOR)
+                # print(smooth_top_x, smooth_top_y, self.ZOOM_FACTOR, ANALYZE_SHRINK_FACTOR)
 
-            # Cut down the size of the cropped box to what we actually want, rather than the full frame
-            cropped = cropped[cropped_y1:cropped_y2, cropped_x1:cropped_x2]
-            cropped = cv2.resize(cropped, (OUTPUT_SIZE[0], OUTPUT_SIZE[1]))
 
-            # Write the name of the clip at the top left
-            # Write a black outline, followed by the same text but in white and thinner
-            cropped = cv2.putText(cropped, FILENAME, (5, OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (0, 0, 0), 3)
-            cropped = cv2.putText(cropped, FILENAME, (5, OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (255, 255, 255), 1)
-            # if DRAW_SCOREBOARD
-            # TODO we should put some format in the Timestamps file to place score 
-            SCOREBOARD_WIDTH = 600
-            HALF_SCOREBOARD_WIDTH = SCOREBOARD_WIDTH // 2
-            SCORE_SECTION_WIDTH = HALF_SCOREBOARD_WIDTH // 6
-            SCOREBOARD_HEIGHT = 30
-            # Draw team one side
-            logging.debug("Draw scoreboard")
-            if team_one is not None:
-                # Team one is left-aligned, so we don't need any extra work
-                # Draw black rectangle for Dark score
-                # This is the inner-box, filled in
-                cv2.rectangle(cropped, (OUTPUT_SIZE[0]//2 - HALF_SCOREBOARD_WIDTH - 1, 0), (OUTPUT_SIZE[0]//2 - 1, SCOREBOARD_HEIGHT-2), team_one.bg_color, -1)
-                # This is the outer-box, just a thin line
-                cv2.rectangle(cropped, (OUTPUT_SIZE[0]//2 - HALF_SCOREBOARD_WIDTH - 1, 0), (OUTPUT_SIZE[0]//2 - 1, SCOREBOARD_HEIGHT-2), team_one.font_color, 1)
-                cv2.putText(cropped, team_one.name, (OUTPUT_SIZE[0]//2 - HALF_SCOREBOARD_WIDTH + 5, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_DUPLEX, 1, team_one.font_color, 1)
-                if team_one_score is not None:
-                    # Draw a box to put the Score into
-                    cv2.rectangle(cropped, (OUTPUT_SIZE[0]//2 - SCORE_SECTION_WIDTH - 1, 0), (OUTPUT_SIZE[0]//2 - 1, SCOREBOARD_HEIGHT-2), team_one.font_color, 1)
-                    cv2.putText(cropped, str(team_one_score), (OUTPUT_SIZE[0]//2 - SCORE_SECTION_WIDTH + 5, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_DUPLEX, 1, team_one.font_color, 1)
-            # Draw team two side
-            if team_two is not None:
-                # Team two needs to be right-aligned
-                team_two_text_size = cv2.getTextSize(team_two.name, cv2.FONT_HERSHEY_DUPLEX, 1, 1)[0][0]
-                # print(team_two_text_size)
-                # Draw white rectangle for White score
-                # This is the inner-box, filled in
-                cv2.rectangle(cropped,(OUTPUT_SIZE[0]//2 + HALF_SCOREBOARD_WIDTH, 0), (OUTPUT_SIZE[0]//2 + 1, SCOREBOARD_HEIGHT-2), team_two.bg_color, -1)
-                # This is the outer-box, just a thin line
-                cv2.rectangle(cropped,(OUTPUT_SIZE[0]//2 + HALF_SCOREBOARD_WIDTH, 0), (OUTPUT_SIZE[0]//2 + 1, SCOREBOARD_HEIGHT-2), team_two.font_color, 1)
-                cv2.putText(cropped, team_two.name, (OUTPUT_SIZE[0]//2 + HALF_SCOREBOARD_WIDTH - team_two_text_size, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_DUPLEX, 1, team_two.font_color, 1)
-                if team_two_score is not None:
-                    # Draw a box to put the Score into
-                    cv2.rectangle(cropped,(OUTPUT_SIZE[0]//2 + SCORE_SECTION_WIDTH, 0), (OUTPUT_SIZE[0]//2 + 1, SCOREBOARD_HEIGHT-2), team_two.font_color, 1)
-                    cv2.putText(cropped, str(team_two_score), (OUTPUT_SIZE[0]//2 + 5, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_DUPLEX, 1, team_two.font_color, 1)
-            # Write the current image to the video file
-            logging.debug(f"Write frame to disk")
-            if WRITE_VIDEO:
-                if total_count < ZOOM_IN_DURATION_FRAMES:
+                # Basically, we define a zoom_time. This will give time for the pull to occur etc.
+                # While the frame_count is less than ... 300 frames? (10 seconds)
+                # We want to do a progressive zoom. We will need to specify the size of the box to be cropped (last line before writing to the video)
+                # This should use a similar formula to now, just the values need to be modified IF zoomed_frame_count < 300
+                # cropped_x1 needs to halve the distance from 0 -> cropped_x1 ->>> Formula could be... 
+                # Calc the distance from the boundary. distance = abs(cropped_XY - {0 OR INPUT_WIDTH[01]})
+                # current_bound_x1 = (total_count / self.ZOOM_IN_DURATION_FRAMES) * distance_x1. We are shrinking $distance by the percent of self.ZOOM_IN_DURATION_FRAMES we have
+                # current_bound_x2 = INPUT_WIDTH - ((total_count / self.ZOOM_IN_DURATION_FRAMES) * distance_x2)
+                # cropped_x1 = cropped_x1 - current_bound_x1
+                # cropped_y1 needs to halve the distance from 0 -> cropped_y1
+                # cropped_x2 needs to be larger, towards the 4k bound (3840?) INPUT_WIDTH[0]
+                # cropped_y2 needs to be larger, towards the 4k bound (2160?) INPUT_WIDTH[1]
+                # And then resize it to self.OUTPUT_SIZE[0]
+                # A linear scaling. We might want to make this do a quicker zoom initially, and then slow down as it approaches. Log-scale?
+                if self.ZOOM_IN_DURATION_FRAMES == -1 or (self.total_count > 0 and self.total_count < self.ZOOM_IN_DURATION_FRAMES):
+                    percent_from_edge = 1 - (self.total_count / self.ZOOM_IN_DURATION_FRAMES)
+                    if self.ZOOM_IN_DURATION_FRAMES == -1:
+                        percent_from_edge = 1
+                    # print(percent_to_edge)
+                    cropped_x1 = int(cropped_x1 - (percent_from_edge * cropped_x1))
+                    cropped_y1 = int(cropped_y1 - (percent_from_edge * cropped_y1))
+
+                    cropped_x2 = int(cropped_x2 + (percent_from_edge * abs(self.input_w - cropped_x2)))
+                    cropped_y2 = int(cropped_y2 + (percent_from_edge * abs(self.input_h - cropped_y2)))
                     pass
-                    # cropped = imutils.resize(cropped, width=OUTPUT_SIZE[0])
-                    # cropped = cv2.resize(cropped, (OUTPUT_SIZE[0], OUTPUT_SIZE[1]))
-                cropped_recording.write(cropped)
-                # print("FRAME WRITTEN")
-            
-            total_count += 1
+                
+                # Draws the crop-preview box
+                if self.SHOW_DEBUG:
+                    # print(cropped_x1, cropped_y1, cropped_x2, cropped_y2)
+                    # Draw the cropping box in blue
+                    cv2.rectangle(self.frame, (cropped_x1 // self.ZOOM_FACTOR, cropped_y1 // self.ZOOM_FACTOR), (cropped_x2 // self.ZOOM_FACTOR, cropped_y2 // self.ZOOM_FACTOR), (255, 0, 0), 1)
+                    self.frame = cv2.putText(self.frame, 'Cropped frame', (cropped_x1 // self.ZOOM_FACTOR, cropped_y1 // self.ZOOM_FACTOR - 5), cv2.FONT_HERSHEY_DUPLEX, .5, (0,0,0), 2)
+                    self.frame = cv2.putText(self.frame, 'Cropped frame', (cropped_x1 // self.ZOOM_FACTOR, cropped_y1 // self.ZOOM_FACTOR - 5), cv2.FONT_HERSHEY_DUPLEX, .5, (255,0,0), 1)
 
-            old_center = new_center
-    
-            
-            # frame = np.bitwise_or(frame, canny[:, :, np.newaxis])
+                # Cut down the size of the cropped box to what we actually want, rather than the full frame
+                self.cropped = self.cropped[cropped_y1:cropped_y2, cropped_x1:cropped_x2]
+                self.cropped = cv2.resize(self.cropped, (self.OUTPUT_SIZE[0], self.OUTPUT_SIZE[1]))
 
-            
-            # canny = cv2.Canny(masked_image, 100, 200)
-            # cv2.imshow("Canny", canny)
+                # Write the name of the clip at the top left
+                # Write a black outline, followed by the same text but in white and thinner
+                self.cropped = cv2.putText(self.cropped, self.FILENAME, (5, self.OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (0, 0, 0), 3)
+                self.cropped = cv2.putText(self.cropped, self.FILENAME, (5, self.OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (255, 255, 255), 1)
+                # if DRAW_SCOREBOARD
+                # TODO we should put some format in the Timestamps file to place score 
+                SCOREBOARD_WIDTH = 600
+                HALF_SCOREBOARD_WIDTH = SCOREBOARD_WIDTH // 2
+                SCORE_SECTION_WIDTH = HALF_SCOREBOARD_WIDTH // 6
+                SCOREBOARD_HEIGHT = 30
+                # Draw team one side
+                logging.debug("Draw scoreboard")
+                if self.team_one is not None:
+                    # Team one is left-aligned, so we don't need any extra work
+                    # Draw black rectangle for Dark score
+                    # This is the inner-box, filled in
+                    cv2.rectangle(self.cropped, (self.OUTPUT_SIZE[0]//2 - HALF_SCOREBOARD_WIDTH - 1, 0), (self.OUTPUT_SIZE[0]//2 - 1, SCOREBOARD_HEIGHT-2), self.team_one.bg_color, -1)
+                    # This is the outer-box, just a thin line
+                    cv2.rectangle(self.cropped, (self.OUTPUT_SIZE[0]//2 - HALF_SCOREBOARD_WIDTH - 1, 0), (self.OUTPUT_SIZE[0]//2 - 1, SCOREBOARD_HEIGHT-2), self.team_one.font_color, 1)
+                    cv2.putText(self.cropped, self.team_one.name, (self.OUTPUT_SIZE[0]//2 - HALF_SCOREBOARD_WIDTH + 5, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_DUPLEX, 1, self.team_one.font_color, 1)
+                    if self.team_one_score is not None:
+                        # Draw a box to put the Score into
+                        cv2.rectangle(self.cropped, (self.OUTPUT_SIZE[0]//2 - SCORE_SECTION_WIDTH - 1, 0), (self.OUTPUT_SIZE[0]//2 - 1, SCOREBOARD_HEIGHT-2), self.team_one.font_color, 1)
+                        cv2.putText(self.cropped, str(self.team_one_score), (self.OUTPUT_SIZE[0]//2 - SCORE_SECTION_WIDTH + 5, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_DUPLEX, 1, self.team_one.font_color, 1)
+                # Draw team two side
+                if self.team_two is not None:
+                    # Team two needs to be right-aligned
+                    self.team_two_text_size = cv2.getTextSize(self.team_two.name, cv2.FONT_HERSHEY_DUPLEX, 1, 1)[0][0]
+                    # print(self.team_two_text_size)
+                    # Draw white rectangle for White score
+                    # This is the inner-box, filled in
+                    cv2.rectangle(self.cropped,(self.OUTPUT_SIZE[0]//2 + HALF_SCOREBOARD_WIDTH, 0), (self.OUTPUT_SIZE[0]//2 + 1, SCOREBOARD_HEIGHT-2), self.team_two.bg_color, -1)
+                    # This is the outer-box, just a thin line
+                    cv2.rectangle(self.cropped,(self.OUTPUT_SIZE[0]//2 + HALF_SCOREBOARD_WIDTH, 0), (self.OUTPUT_SIZE[0]//2 + 1, SCOREBOARD_HEIGHT-2), self.team_two.font_color, 1)
+                    cv2.putText(self.cropped, self.team_two.name, (self.OUTPUT_SIZE[0]//2 + HALF_SCOREBOARD_WIDTH - self.team_two_text_size, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_DUPLEX, 1, self.team_two.font_color, 1)
+                    if self.team_two_score is not None:
+                        # Draw a box to put the Score into
+                        cv2.rectangle(self.cropped,(self.OUTPUT_SIZE[0]//2 + SCORE_SECTION_WIDTH, 0), (self.OUTPUT_SIZE[0]//2 + 1, SCOREBOARD_HEIGHT-2), self.team_two.font_color, 1)
+                        cv2.putText(self.cropped, str(self.team_two_score), (self.OUTPUT_SIZE[0]//2 + 5, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_DUPLEX, 1, self.team_two.font_color, 1)
+                # Write the current image to the video file
+                logging.debug(f"Write frame to disk")
+                if self.WRITE_VIDEO:
+                    if self.total_count < self.ZOOM_IN_DURATION_FRAMES:
+                        pass
+                        # cropped = imutils.resize(cropped, width=self.OUTPUT_SIZE[0])
+                        # cropped = cv2.resize(cropped, (self.OUTPUT_SIZE[0], self.OUTPUT_SIZE[1]))
+                    self.cropped_recording.write(self.cropped)
+                    # print("FRAME WRITTEN")
+                
+                self.total_count += 1
 
-            # if SHOW_DEBUG:
-            # Green overlay disabled for now
-            if False: # DEBUG:
-                print(f"Generate green overlay")
-                # Draw the threshold over top of the live frame
-                frame = np.bitwise_or(frame, thresh[:, :, np.newaxis])
-                # We'd rather this be AFTER the overlay, but it's more complex now that the frame is decimal instead of int
-                # Convert our live frame to Float from int. 
-                frame = np.array(frame, dtype=np.float) # .015 secs
-                frame /= 255.0 # .013 secs
-
-                # Multiply our green mask by our transparency mask, and then apply it on top of the Live frame
-                frame = green*m2 + frame*(1.0-m2) # .09 secs
-                # Convert the frame back to allow file-writing. If we aren't writing the debug file, don't bother
-                frame *= 255.0
-                frame = np.array(frame, dtype=np.uint8)
-            else:  
-                # Draw polygon of the Masked-Area. This is NOT accurate, it does not include the Exclusion zones
-                cv2.polylines(frame, roi_corners, True, (0, 0, 255), 2)
-
-
-            if SHOW_DEBUG:
-                logging.debug(f"Draw debug rectangles over everything")
-                # Draw the outer buffer box
-                cv2.rectangle(frame, (left_buffer, top_buffer), (right_buffer, bottom_buffer), (255, 255, 255), 1)
-                frame = cv2.putText(frame, 'Outer buffer box', (left_buffer, top_buffer-5), cv2.FONT_HERSHEY_DUPLEX, .5, (0,0,0), 2)
-                frame = cv2.putText(frame, 'Outer buffer box', (left_buffer, top_buffer-5), cv2.FONT_HERSHEY_DUPLEX, .5, (255,255,255), 1)
-
-                # Draw bounds of what the Canny is detecting
-                cv2.rectangle(frame, (canny_min_x, canny_min_y), (canny_max_x, canny_max_y), (0, 255, 0), 1)
-                # Draw the center of our zoom
-                cv2.rectangle(frame, (new_center[0]-1, new_center[1]-1), (new_center[0]+1, new_center[1]+1), (255, 255, 255), 2)
-                # Inner deadzone
-                cv2.rectangle(frame, (new_center[0] - INNER_DEADZONE_X, new_center[1] - INNER_DEADZONE_Y), (new_center[0] + INNER_DEADZONE_X, new_center[1] + INNER_DEADZONE_Y), (255,255,255), 1)
-                # Outer deadzone
-                cv2.rectangle(frame, (new_center[0] - DEADZONE_X, new_center[1] - DEADZONE_Y), (new_center[0] + DEADZONE_X, new_center[1] + DEADZONE_Y), (255,255,255), 1)
-                frame = cv2.putText(frame, "Movement deadzone", (new_center[0] - DEADZONE_X, new_center[1] - DEADZONE_Y - 5), cv2.FONT_HERSHEY_DUPLEX, .5, (0, 0, 0), 2)
-                frame = cv2.putText(frame, "Movement deadzone", (new_center[0] - DEADZONE_X, new_center[1] - DEADZONE_Y - 5), cv2.FONT_HERSHEY_DUPLEX, .5, (255, 255, 255), 1)
-                # This draws a box showing what the Cropped Image will contain
-                # cv2.rectangle(frame, (smooth_top_x * ANALYZE_SHRINK_FACTOR * ZOOM_FACTOR, smooth_top_y * ANALYZE_SHRINK_FACTOR * ZOOM_FACTOR), (smooth_top_x + FORCED_WIDTH//(ZOOM_FACTOR * ANALYZE_SHRINK_FACTOR), smooth_top_y + FORCED_HEIGHT//(ZOOM_FACTOR * ANALYZE_SHRINK_FACTOR)), (255, 255, 255), 2)
-                # Draw a pixel at the center of the in-the-moment edges
-                cv2.rectangle(frame, (center_x-1, center_y-1), (center_x+1, center_y+1), (0, 0, 255), 1)
-
-            
-            # 6) De-Adjust for the next loop?
-            new_center[0] -= args["offset_x"]
-            new_center[1] -= args["offset_y"]
-
-            # If we want to keep our debug output, write the "live" frame to a debug file
-            if DEBUG:
-                print(f"Write debug view to disk")
-                live_frame = cv2.resize(frame, (input_w // ANALYZE_SHRINK_FACTOR, input_h // ANALYZE_SHRINK_FACTOR))
-                live_recording.write(live_frame)
-
-            # This is the "debug" view
-            if SHOW_DEBUG:
-                cv2.imshow("Debug", frame)
-            # This is our final output, being written to our "good" file
-            cv2.imshow("Cropped", cropped)
-            # cv2.imshow("ROI Mask", mask)
-            # cv2.imshow("Threshold", thresh)
-            # cv2.imshow("Preview", preview)
+                self.old_center = self.new_center
         
-            # cv2.imshow("masked_image", masked_image)
-            # cv2.imshow("Thresh", thresh)
-            # cv2.imshow("Frame Delta", frameDelta)
-        key = cv2.waitKey(1) & 0xFF
-        # if the `q` key is pressed, break from the lop
-        if key == ord("q"):
-            break
-        count += 1
-        # total_count += 1
-        # input("ENTER TO CONTINUE")
-    # cleanup the camera and close any open windows
-    if WRITE_VIDEO:
-        cropped_recording.release()
-    if DEBUG:
-        live_recording.release()
-    vs.stop() if args.get("video", None) is None else vs.release()
-    cv2.destroyAllWindows()
-    logging.info("Clip completed")
-    return 0 
+                
+                # frame = np.bitwise_or(frame, canny[:, :, np.newaxis])
+
+                
+                # canny = cv2.Canny(masked_image, 100, 200)
+                # cv2.imshow("Canny", canny)
+
+                # if self.SHOW_DEBUG:
+                # Green overlay disabled for now
+                if False: # DEBUG:
+                    print(f"Generate green overlay")
+                    # Draw the threshold over top of the live frame
+                    frame = np.bitwise_or(frame, thresh[:, :, np.newaxis])
+                    # We'd rather this be AFTER the overlay, but it's more complex now that the frame is decimal instead of int
+                    # Convert our live frame to Float from int. 
+                    frame = np.array(frame, dtype=np.float) # .015 secs
+                    frame /= 255.0 # .013 secs
+
+                    # Multiply our green mask by our transparency mask, and then apply it on top of the Live frame
+                    frame = green*m2 + frame*(1.0-m2) # .09 secs
+                    # Convert the frame back to allow file-writing. If we aren't writing the debug file, don't bother
+                    frame *= 255.0
+                    frame = np.array(frame, dtype=np.uint8)
+                else:  
+                    # Draw polygon of the Masked-Area. This is NOT accurate, it does not include the Exclusion zones
+                    cv2.polylines(self.frame, self.roi_corners, True, (0, 0, 255), 2)
+
+
+                if self.SHOW_DEBUG:
+                    logging.debug(f"Draw debug rectangles over everything")
+                    # Draw the outer buffer box
+                    cv2.rectangle(self.frame, (left_buffer, top_buffer), (right_buffer, bottom_buffer), (255, 255, 255), 1)
+                    self.frame = cv2.putText(self.frame, 'Outer buffer box', (left_buffer, top_buffer-5), cv2.FONT_HERSHEY_DUPLEX, .5, (0,0,0), 2)
+                    self.frame = cv2.putText(self.frame, 'Outer buffer box', (left_buffer, top_buffer-5), cv2.FONT_HERSHEY_DUPLEX, .5, (255,255,255), 1)
+
+                    # Draw bounds of what the Canny is detecting
+                    cv2.rectangle(self.frame, (canny_min_x, canny_min_y), (canny_max_x, canny_max_y), (0, 255, 0), 1)
+                    # Draw the center of our zoom
+                    cv2.rectangle(self.frame, (self.new_center[0]-1, self.new_center[1]-1), (self.new_center[0]+1, self.new_center[1]+1), (255, 255, 255), 2)
+                    # Inner deadzone
+                    cv2.rectangle(self.frame, (self.new_center[0] - self.INNER_DEADZONE_X, self.new_center[1] - self.INNER_DEADZONE_Y), (self.new_center[0] + self.INNER_DEADZONE_X, self.new_center[1] + self.INNER_DEADZONE_Y), (255,255,255), 1)
+                    # Outer deadzone
+                    cv2.rectangle(self.frame, (self.new_center[0] - self.DEADZONE_X, self.new_center[1] - self.DEADZONE_Y), (self.new_center[0] + self.DEADZONE_X, self.new_center[1] + self.DEADZONE_Y), (255,255,255), 1)
+                    self.frame = cv2.putText(self.frame, "Movement deadzone", (self.new_center[0] - self.DEADZONE_X, self.new_center[1] - self.DEADZONE_Y - 5), cv2.FONT_HERSHEY_DUPLEX, .5, (0, 0, 0), 2)
+                    self.frame = cv2.putText(self.frame, "Movement deadzone", (self.new_center[0] - self.DEADZONE_X, self.new_center[1] - self.DEADZONE_Y - 5), cv2.FONT_HERSHEY_DUPLEX, .5, (255, 255, 255), 1)
+                    # This draws a box showing what the Cropped Image will contain
+                    # cv2.rectangle(frame, (smooth_top_x * ANALYZE_SHRINK_FACTOR * self.ZOOM_FACTOR, smooth_top_y * ANALYZE_SHRINK_FACTOR * self.ZOOM_FACTOR), (smooth_top_x + FORCED_WIDTH//(self.ZOOM_FACTOR * ANALYZE_SHRINK_FACTOR), smooth_top_y + FORCED_HEIGHT//(self.ZOOM_FACTOR * ANALYZE_SHRINK_FACTOR)), (255, 255, 255), 2)
+                    # Draw a pixel at the center of the in-the-moment edges
+                    cv2.rectangle(self.frame, (center_x-1, center_y-1), (center_x+1, center_y+1), (0, 0, 255), 1)
+
+                
+                # 6) De-Adjust for the next loop?
+                self.new_center[0] -= args["offset_x"]
+                self.new_center[1] -= args["offset_y"]
+
+                # If we want to keep our debug output, write the "live" frame to a debug file
+                if self.DEBUG:
+                    print(f"Write debug view to disk")
+                    # Resize the frame to our Analyze Shrink factor
+                    live_frame = cv2.resize(self.frame, (self.input_w // self.ANALYZE_SHRINK_FACTOR, self.input_h // self.ANALYZE_SHRINK_FACTOR))
+                    self.live_recording.write(live_frame)
+
+                # This is the "debug" view
+                if self.SHOW_DEBUG:
+                    cv2.imshow("Debug", self.frame)
+                # This is our final output, being written to our "good" file
+                cv2.imshow("Cropped", self.cropped)
+                # cv2.imshow("ROI Mask", mask)
+                # cv2.imshow("Threshold", thresh)
+                # cv2.imshow("Preview", preview)
+            
+                # cv2.imshow("masked_image", masked_image)
+                # cv2.imshow("Thresh", thresh)
+                # cv2.imshow("Frame Delta", frameDelta)
+            key = cv2.waitKey(1) & 0xFF
+            # if the `q` key is pressed, break from the lop
+            if key == ord("q"):
+                break
+            self.count += 1
+            # total_count += 1
+            # input("ENTER TO CONTINUE")
+        # cleanup the camera and close any open windows
+        if self.WRITE_VIDEO:
+            self.cropped_recording.release()
+        if self.DEBUG:
+            self.live_recording.release()
+        self.vs.stop() if args.get("video", None) is None else self.vs.release()
+        cv2.destroyAllWindows()
+        logging.info("Clip completed")
+        return 0 
 
 def run_args(zoom_args):
     ap = argparse.ArgumentParser()
@@ -789,7 +820,9 @@ def run_args(zoom_args):
     ap.add_argument("--team_two_score", "--t2s", help="Current score for Team 2", type=int, default=None)
     args = vars(ap.parse_args(zoom_args))
     print(args)
-    return main(args)
+    z = ZoomedClipCreator(args)
+    return z.process_video()
+    # return main(args)
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
@@ -819,4 +852,6 @@ if __name__ == "__main__":
     ap.add_argument("--team_two_score", "--t2s", help="Current score for Team 2", type=str, default=None)
     args = vars(ap.parse_args())
 
-    main(args)
+    z = ZoomedClipCreator(args)
+    z.process_video()
+    # main(args)
