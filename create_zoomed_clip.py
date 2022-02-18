@@ -38,16 +38,16 @@ import logging
 #     cropped_y2 = cropped_y1 + target_height
 #     return (cropped_x1, cropped_y1), (cropped_x2, cropped_y2)
 
-def get_new_momentum(old_speed, new_distance):
+def get_new_momentum(old_velocity, new_distance):
     acceleration = 1
-    # print(old_speed, new_distance)
-    if new_distance > old_speed:
-        # print(old_speed + acceleration)
-        return old_speed - acceleration
-    elif new_distance < old_speed:
-        return old_speed + acceleration
+    # print(old_velocity, new_distance)
+    if new_distance > old_velocity:
+        # print(old_velocity + acceleration)
+        return old_velocity - acceleration
+    elif new_distance < old_velocity:
+        return old_velocity + acceleration
     else:
-        return max(old_speed - acceleration, 0)
+        return max(old_velocity - acceleration, 0)
 
 def find_dilated_canny_contours(canny, input_w, input_h, args):
     thresh = cv2.dilate(canny, None, iterations=1)
@@ -132,11 +132,113 @@ class ZoomedClipCreator:
         # canny_mask = cv2.bitwise_and(frame, canny_mask)
         return canny_mask, roi_corners
 
+    def find_new_center_from_old(self, canny_coords):
+        # This is the locations of the edges we detected
+        x_min, y_max, x_max, y_min = canny_coords
+
+        # If we are not currently trying to get centered... check if we need to move that direction
+        if not self.find_inner_deadzone:
+            if abs(self.old_center[0] - self.new_center[0]) < self.DEADZONE_X:
+                self.new_center[0] = self.old_center[0]
+            else:
+                self.find_inner_deadzone = True
+                # print("DEADZONE FLAG SET TO TRUE")
+            # compare old Y to new Y
+            if abs(self.old_center[1] - self.new_center[1]) < self.DEADZONE_Y:
+                self.new_center[1] = self.old_center[1]
+        # This is NOT an else statement so that if we trigger it above, then we immediately begin to shift to fix it
+        if self.find_inner_deadzone:
+            # print("DEADZONE FLAG CURRENTLY TRUE")
+            if abs(self.old_center[0] - self.new_center[0]) < self.INNER_DEADZONE_X:
+                self.new_center[0] = self.old_center[0]
+                self.find_inner_deadzone = False
+                # print("DEADZONE FLAG SET TO FALSE")
+            # compare old Y to new Y
+            if abs(self.old_center[1] - self.new_center[1]) < self.DEADZONE_Y:
+                self.new_center[1] = self.old_center[1]
+        # If all of our edges are well-within the buffers, don't move the camera at all. Here we generate the buffers based on where the old_center was.
+        # If new_center is still inside this, don't shift
+
+        # 2) Are we well inside the frame? If yes, stay there
+        self.left_buffer = (self.old_center[0] - self.INPUT_SIZE[0]//self.ANALYZE_SHRINK_FACTOR//self.ZOOM_FACTOR2 + self.OUTER_BOUND_BUFFER_X)
+        self.right_buffer = (self.old_center[0] + self.INPUT_SIZE[0]//self.ANALYZE_SHRINK_FACTOR//self.ZOOM_FACTOR2 - self.OUTER_BOUND_BUFFER_X)
+        self.top_buffer = (self.old_center[1] - self.INPUT_SIZE[1]//self.ANALYZE_SHRINK_FACTOR//self.ZOOM_FACTOR2 + self.OUTER_BOUND_BUFFER_Y)
+        self.bottom_buffer = (self.old_center[1] + self.INPUT_SIZE[1]//self.ANALYZE_SHRINK_FACTOR//self.ZOOM_FACTOR2 - self.OUTER_BOUND_BUFFER_Y)
+        # print(new_center, self.OUTPUT_SIZE, OUTER_BOUND_BUFFER_X, OUTER_BOUND_BUFFER_Y)
+        # print(left_buffer, right_buffer, top_buffer, bottom_buffer)
+        # Check if we are already staying in place
+        # Currently DISABLED for testing.
+        if True:
+            if self.new_center != self.old_center:
+                # If x_values are between the buffers, then don't move
+                if x_min > self.left_buffer and x_max < self.right_buffer:
+                    # print("X between buffers, not moving")
+                    self.new_center[0] = self.old_center[0]
+        # To calculate Zoom, we want to get x_max - x_min. If that value is larger than our Crop target, then we need to zoom out some.
+
+        # cropped = cv2.putText(cropped, self.FILENAME, (5, self.OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (0, 0, 0), 3)
+        # cropped = cv2.putText(cropped, self.FILENAME, (5, self.OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (255, 255, 255), 1)
+        
+        # Limit movement to MAX_PIXEL_MOVEMENT_X/Y pixels
+
+        # 3) Are we moving? Okay, only move _this_ quickly
+        # compare old X to new X
+
+        # print(old_center, new_center)
+        # velocity = get_new_momentum(velocity, old_center[0] - new_center[0])
+        # if velocity > MAX_PIXEL_MOVEMENT_X:
+        #     velocity = MAX_PIXEL_MOVEMENT_X
+        # print(velocity)
+
+        # compare old X to new X
+        # If we are moving further than our max_allowed_movement...
+        if abs(self.old_center[0] - self.new_center[0]) > self.MAX_PIXEL_MOVEMENT_X:
+            # If we are moving to the left, set the new center LEFT by velocity
+            if self.old_center[0] > self.new_center[0]:
+                self.new_center[0] = self.old_center[0] - self.MAX_PIXEL_MOVEMENT_X
+            # Otherwise, set the new center RIGHT by velocity
+            else:
+                self.new_center[0] = self.old_center[0] + self.MAX_PIXEL_MOVEMENT_X
+
+        # compare old Y to new Y
+        # If we are moving further than our max_allowed_movement...
+        if abs(self.old_center[1] - self.new_center[1]) > self.MAX_PIXEL_MOVEMENT_Y:
+            # If we're moving DOWN, adjust our movement upwards
+            if self.old_center[1] > self.new_center[1]:
+                self.new_center[1] = self.old_center[1] - self.MAX_PIXEL_MOVEMENT_Y
+            # Otherwise, we must be moving UP. So adjust ourselves upwards
+            else:
+                self.new_center[1] = self.old_center[1] + self.MAX_PIXEL_MOVEMENT_Y
+
+        smooth_top_x = 1
+        # smooth_top_x = max(new_center[0] - (FORCED_WIDTH // self.ZOOM_FACTOR2), 0)
+        # smooth_top_y = max(new_center[1] - (FORCED_HEIGHT // self.ZOOM_FACTOR2), 0)
+        # print("NEW CENTER", new_center)
+
+        # If the bounds are still within our frame, don't move at all
+        if self.PREVENT_PAN_WHILE_BOUNDED:
+            if x_max < smooth_top_x + self.input_w//self.ZOOM_FACTOR and x_min > smooth_top_x:
+                # print("STILL WITHIN THE PREVIOUS BOX X")
+                self.new_center[0] = self.old_center[0]
+            if y_max < self.smooth_top_y + self.input_h//self.ZOOM_FACTOR and y_min > self.smooth_top_y:
+                # print("STILL WITHIN THE PREVIOUS BOX Y")
+                self.new_center[1] = self.old_center[1]
+            if x_max < self.top_x + self.input_w//self.ZOOM_FACTOR and x_min > self.top_x:
+                # print("STILL WITHIN THE PREVIOUS BOX X")
+                self.new_center[0] = self.old_center[0]
+            if y_max < self.top_y + self.input_h//self.ZOOM_FACTOR and y_min > self.top_y:
+                # print("STILL WITHIN THE PREVIOUS BOX Y")
+                self.new_center[1] = self.old_center[1]
+            # If all the bounds are still inside our box, don't move at all
+
+        # TODO Add code for "If something is out on BOTH sides, we need to zoom out"
+
     # This will persist for the entirety of this clip. The Init() should just prep the clip
     # Another function should do the actual step through of each frame. Each frame should be processed in another function.
     def __init__(self, args):
         # Things in self. should only be ones that carry across frames
         self.DEBUG = args["debug"]
+        self.QUIET = True
         if self.DEBUG:
             self.SHOW_DEBUG = True
         else:
@@ -189,12 +291,20 @@ class ZoomedClipCreator:
         self.new_center = None
         self.old_center = None
 
-        self.speed = 0
+        # We don't care about these in the Y-direction, not enough movement to care.
+        # With these added, we probably want to bump our default max_movement up a little bit from 3.
+        self.velocity = 0
+        self.acceleration = 0
+        self.jerk = 0
 
-        # Maximum movement speed of the cropped zone per frame.
+        # 1 means the most we change per frame is 1 ? is that sufficient?
+        self.max_acceleration = 1
+        self.max_jerk = 1
+
+        # Maximum movement velocity of the cropped zone per frame.
         self.MAX_PIXEL_MOVEMENT_X = args["max_camera_movement_x"]
         # MAX_PIXEL_MOVEMENT_X = 10
-        self.MAX_PIXEL_MOVEMENT_Y = args["max_camera_movement_x"]
+        self.MAX_PIXEL_MOVEMENT_Y = args["max_camera_movement_y"]
 
         # Transparency level
         self.TRANSPARENCY = .3
@@ -206,7 +316,6 @@ class ZoomedClipCreator:
         self.INNER_DEADZONE_Y = self.DEADZONE_Y // 2
         self.OUTER_BOUND_BUFFER_X = args["outer_bound_buffer_x"]
         self.OUTER_BOUND_BUFFER_Y = args["outer_bound_buffer_y"]
-
 
         # This value defines if the crop should attempt to keep the video centered on the boxes, or simply stop moving if all the boxes are still inside the crop.
         self.PREVENT_PAN_WHILE_BOUNDED = False
@@ -266,11 +375,12 @@ class ZoomedClipCreator:
         # Have the zoom-pieces use the shrunken frame (raw_input // 4), but the output video use raw_input // 2 for the zoom factor. Make these factors codeable?
         if self.WRITE_VIDEO:
             # If the file already exists, and we are NOT overwriting existing
-            if os.path.exists(args["output_self.filename"]) and not args["overwrite_existing"]:
+            if os.path.exists(args["output_filename"]) and not args["overwrite_existing"]:
                 print("File already exists, and command line arg '--overwrite_existing' is not specified.")
+                # raise FileExistsError
                 return 1
             if args.get("output_filename", None):
-                self.cropped_recording = cv2.VideoWriter(args["output_self.filename"], cv2.VideoWriter_fourcc(*'MP4V'), self.fps, (self.OUTPUT_SIZE[0], self.OUTPUT_SIZE[1]))
+                self.cropped_recording = cv2.VideoWriter(args["output_filename"], cv2.VideoWriter_fourcc(*'MP4V'), self.fps, (self.OUTPUT_SIZE[0], self.OUTPUT_SIZE[1]))
             else:
                 self.cropped_recording = cv2.VideoWriter(args["video"] + "_canny.mp4", cv2.VideoWriter_fourcc(*'MP4V'), self.fps, (self.OUTPUT_SIZE[0], self.OUTPUT_SIZE[1]))
         if self.DEBUG:
@@ -286,6 +396,7 @@ class ZoomedClipCreator:
         self.process_video()
 
     def process_video(self):
+        self.process_start_time = datetime.datetime.now()
         # loop over the frames of the video
         while True:
             # print("LINE")
@@ -316,12 +427,22 @@ class ZoomedClipCreator:
             self.frame = imutils.resize(self.frame, width=self.input_w // self.ANALYZE_SHRINK_FACTOR)
             
             logging.debug(f"Done resizing frame")
+
+
+
+
+
+
+
             # Create the mask, this should only be done once
             # TODO this should be a separate function
             if self.mask is None:
+                # self.mask = self.create_roi_mask(roi_filepath)
                 logging.debug("Creating mask")
+                # If we were passed an ROI filepath, use that
                 if args.get("roi_filepath", None):
                     self.mask, self.roi_corners = self.generate_roi_mask(args["roi_filepath"], self.frame)
+                # Otherwise, we need to create an ROI file 
                 else:
                     roi_file = create_roi_from_video(args["video"])
                     self.mask, self.roi_corners = self.generate_roi_mask(roi_file, self.frame)
@@ -336,6 +457,8 @@ class ZoomedClipCreator:
                 self.green = np.ones(self.frame.shape, dtype=np.float)*(0,1,0) # .04 secs
                 logging.debug("Done creating mask")
 
+
+
             logging.debug("Running Canny detection")
             self.canny = self.frame.copy()
             self.canny = cv2.Canny(self.canny, 240, 250)
@@ -345,6 +468,7 @@ class ZoomedClipCreator:
             self.canny = cv2.bitwise_and(self.canny, bw_mask)
             logging.debug("Find Dilated Canny contours")
             # Dilate the image to fill in gaps, then find contours
+            # if self.total_count % self.FRAMES_BETWEEN_RE_COMPARE != 0:
             canny_min_x, canny_max_x, canny_min_y, canny_max_y, thresh = find_dilated_canny_contours(self.canny, self.input_w, self.input_h, args)
 
             # Draw a line from roi_cones[0] to roi_cones[2]
@@ -401,7 +525,7 @@ class ZoomedClipCreator:
                 y_max = None
 
             logging.debug(f"Starting to locate camera-center processing")
-            # If we didn't find any Canny Edges, re-use values from prior
+            # If we didn't find any Canny Edges, OR we are skipping frames between recompares, re-use values from prior
             if not canny_min_x or self.total_count % self.FRAMES_BETWEEN_RE_COMPARE != 0:
                 # print("REUSING OLD CENTER")
                 # print("NO Canny Edges found")
@@ -415,11 +539,11 @@ class ZoomedClipCreator:
                     self.frame = cv2.putText(self.frame, 'Cropped frame', (top_x, top_y-5), cv2.FONT_HERSHEY_DUPLEX, .5, (255,0,0), 1)
                 # If we did not have previous values to use, write out the full frame. This should only ever occur on the very first frame(s).
                 if not (center_x and center_y):
-                    print("WRITING BAD OUTPUT")
+                    logging.warning("WRITING BAD OUTPUT")
                     # raise ValueError("No canny edges detected in frame, and no center yet produced")
-                    self.frame = cv2.resize(self.frame, (self.OUTPUT_SIZE[0], self.OUTPUT_SIZE[1]))
                     # Write the current image to the video file
                     if self.WRITE_VIDEO:
+                        self.frame = cv2.resize(self.frame, (self.OUTPUT_SIZE[0], self.OUTPUT_SIZE[1]))
                         # Write the clip name on the frame, before sending to file
                         self.frame = cv2.putText(self.frame, self.FILENAME, (5, self.OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (0, 0, 0), 3)
                         self.frame = cv2.putText(self.frame, self.FILENAME, (5, self.OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (255, 255, 255), 1)
@@ -455,104 +579,11 @@ class ZoomedClipCreator:
 
 
 
-
+                canny_coords = (x_min, y_max, x_max, y_min)
                 # TODO this should all be 1 function 
 
 
-
-
-                if not self.find_inner_deadzone:
-                    if abs(self.old_center[0] - self.new_center[0]) < self.DEADZONE_X:
-                        self.new_center[0] = self.old_center[0]
-                    else:
-                        self.find_inner_deadzone = True
-                        # print("DEADZONE FLAG SET TO TRUE")
-                    # compare old Y to new Y
-                    if abs(self.old_center[1] - self.new_center[1]) < self.DEADZONE_Y:
-                        self.new_center[1] = self.old_center[1]
-                # This is NOT an else statement so that if we trigger it above, then we immediately begin to shift to fix it
-                if self.find_inner_deadzone:
-                    # print("DEADZONE FLAG CURRENTLY TRUE")
-                    if abs(self.old_center[0] - self.new_center[0]) < self.INNER_DEADZONE_X:
-                        self.new_center[0] = self.old_center[0]
-                        self.find_inner_deadzone = False
-                        # print("DEADZONE FLAG SET TO FALSE")
-                    # compare old Y to new Y
-                    if abs(self.old_center[1] - self.new_center[1]) < self.DEADZONE_Y:
-                        self.new_center[1] = self.old_center[1]
-                # If all of our edges are well-within the buffers, don't move the camera at all. Here we generate the buffers based on where the old_center was.
-                # If new_center is still inside this, don't shift
-
-                # 2) Are we well inside the frame? If yes, stay there
-                left_buffer = (self.old_center[0] - self.INPUT_SIZE[0]//self.ANALYZE_SHRINK_FACTOR//self.ZOOM_FACTOR2 + self.OUTER_BOUND_BUFFER_X)
-                right_buffer = (self.old_center[0] + self.INPUT_SIZE[0]//self.ANALYZE_SHRINK_FACTOR//self.ZOOM_FACTOR2 - self.OUTER_BOUND_BUFFER_X)
-                top_buffer = (self.old_center[1] - self.INPUT_SIZE[1]//self.ANALYZE_SHRINK_FACTOR//self.ZOOM_FACTOR2 + self.OUTER_BOUND_BUFFER_Y)
-                bottom_buffer = (self.old_center[1] + self.INPUT_SIZE[1]//self.ANALYZE_SHRINK_FACTOR//self.ZOOM_FACTOR2 - self.OUTER_BOUND_BUFFER_Y)
-                # print(new_center, self.OUTPUT_SIZE, OUTER_BOUND_BUFFER_X, OUTER_BOUND_BUFFER_Y)
-                # print(left_buffer, right_buffer, top_buffer, bottom_buffer)
-                # Check if we are already staying in place
-                # Currently DISABLED for testing.
-                if False:
-                    if new_center != old_center:
-                        # If x_values are between the buffers, then don't move
-                        if x_min > left_buffer and x_max < right_buffer:
-                            # print("X between buffers, not moving")
-                            new_center[0] = old_center[0]
-                # To calculate Zoom, we want to get x_max - x_min. If that value is larger than our Crop target, then we need to zoom out some.
-
-                # cropped = cv2.putText(cropped, self.FILENAME, (5, self.OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (0, 0, 0), 3)
-                # cropped = cv2.putText(cropped, self.FILENAME, (5, self.OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (255, 255, 255), 1)
-                
-                # TODO add an outer deadzone. "If the objects detected are well within the bounds, don't move at all. "
-                # Limit movement to MAX_PIXEL_MOVEMENT_X/Y pixels
-
-                # 3) Are we moving? Okay, only move _this_ quickly
-                # compare old X to new X
-
-                # print(old_center, new_center)
-                # speed = get_new_momentum(speed, old_center[0] - new_center[0])
-                # if speed > MAX_PIXEL_MOVEMENT_X:
-                #     speed = MAX_PIXEL_MOVEMENT_X
-                # print(speed)
-
-                if abs(self.old_center[0] - self.new_center[0]) > self.MAX_PIXEL_MOVEMENT_X:
-                    # If we are moving to the left, set the new center LEFT by speed
-                    if self.old_center[0] > self.new_center[0]:
-                        self.new_center[0] = self.old_center[0] - self.MAX_PIXEL_MOVEMENT_X
-                    # Otherwise, set the new center RIGHT by speed
-                    else:
-                        self.new_center[0] = self.old_center[0] + self.MAX_PIXEL_MOVEMENT_X
-
-                # compare old Y to new Y
-                if abs(self.old_center[1] - self.new_center[1]) > self.MAX_PIXEL_MOVEMENT_Y:
-                    if self.old_center[1] > self.new_center[1]:
-                        self.new_center[1] = self.old_center[1] - self.MAX_PIXEL_MOVEMENT_Y
-                    else:
-                        self.new_center[1] = self.old_center[1] + self.MAX_PIXEL_MOVEMENT_Y
-
-                smooth_top_x = 1
-                # smooth_top_x = max(new_center[0] - (FORCED_WIDTH // self.ZOOM_FACTOR2), 0)
-                # smooth_top_y = max(new_center[1] - (FORCED_HEIGHT // self.ZOOM_FACTOR2), 0)
-                # print("NEW CENTER", new_center)
-
-                # If the bounds are still within our frame, don't move at all
-                if self.PREVENT_PAN_WHILE_BOUNDED:
-                    if x_max < smooth_top_x + self.input_w//self.ZOOM_FACTOR and x_min > smooth_top_x:
-                        # print("STILL WITHIN THE PREVIOUS BOX X")
-                        self.new_center[0] = self.old_center[0]
-                    if y_max < self.smooth_top_y + self.input_h//self.ZOOM_FACTOR and y_min > self.smooth_top_y:
-                        # print("STILL WITHIN THE PREVIOUS BOX Y")
-                        self.new_center[1] = self.old_center[1]
-                    if x_max < top_x + self.input_w//self.ZOOM_FACTOR and x_min > top_x:
-                        # print("STILL WITHIN THE PREVIOUS BOX X")
-                        self.new_center[0] = self.old_center[0]
-                    if y_max < top_y + self.input_h//self.ZOOM_FACTOR and y_min > top_y:
-                        # print("STILL WITHIN THE PREVIOUS BOX Y")
-                        self.new_center[1] = self.old_center[1]
-                    # If all the bounds are still inside our box, don't move at all
-
-
-
+                self.find_new_center_from_old(canny_coords=canny_coords)
 
                 # TODO until here, should be 1 function. Take in Old_Center, calculate New_Center based on internal parameters
 
@@ -732,9 +763,9 @@ class ZoomedClipCreator:
                 if self.SHOW_DEBUG:
                     logging.debug(f"Draw debug rectangles over everything")
                     # Draw the outer buffer box
-                    cv2.rectangle(self.frame, (left_buffer, top_buffer), (right_buffer, bottom_buffer), (255, 255, 255), 1)
-                    self.frame = cv2.putText(self.frame, 'Outer buffer box', (left_buffer, top_buffer-5), cv2.FONT_HERSHEY_DUPLEX, .5, (0,0,0), 2)
-                    self.frame = cv2.putText(self.frame, 'Outer buffer box', (left_buffer, top_buffer-5), cv2.FONT_HERSHEY_DUPLEX, .5, (255,255,255), 1)
+                    cv2.rectangle(self.frame, (self.left_buffer, self.top_buffer), (self.right_buffer, self.bottom_buffer), (255, 255, 255), 1)
+                    self.frame = cv2.putText(self.frame, 'Outer buffer box', (self.left_buffer, self.top_buffer-5), cv2.FONT_HERSHEY_DUPLEX, .5, (0,0,0), 2)
+                    self.frame = cv2.putText(self.frame, 'Outer buffer box', (self.left_buffer, self.top_buffer-5), cv2.FONT_HERSHEY_DUPLEX, .5, (255,255,255), 1)
 
                     # Draw bounds of what the Canny is detecting
                     cv2.rectangle(self.frame, (canny_min_x, canny_min_y), (canny_max_x, canny_max_y), (0, 255, 0), 1)
@@ -758,7 +789,7 @@ class ZoomedClipCreator:
 
                 # If we want to keep our debug output, write the "live" frame to a debug file
                 if self.DEBUG:
-                    print(f"Write debug view to disk")
+                    logging.debug(f"Write debug view to disk")
                     # Resize the frame to our Analyze Shrink factor
                     live_frame = cv2.resize(self.frame, (self.input_w // self.ANALYZE_SHRINK_FACTOR, self.input_h // self.ANALYZE_SHRINK_FACTOR))
                     self.live_recording.write(live_frame)
@@ -767,7 +798,8 @@ class ZoomedClipCreator:
                 if self.SHOW_DEBUG:
                     cv2.imshow("Debug", self.frame)
                 # This is our final output, being written to our "good" file
-                cv2.imshow("Cropped", self.cropped)
+                if not self.QUIET:
+                    cv2.imshow("Cropped", self.cropped)
                 # cv2.imshow("ROI Mask", mask)
                 # cv2.imshow("Threshold", thresh)
                 # cv2.imshow("Preview", preview)
@@ -788,8 +820,22 @@ class ZoomedClipCreator:
         if self.DEBUG:
             self.live_recording.release()
         self.vs.stop() if args.get("video", None) is None else self.vs.release()
+
         cv2.destroyAllWindows()
+        self.process_end_time = datetime.datetime.now()
+        # self.process_start_time = datetime.datetime.now()
+        difference = (self.process_end_time - self.process_start_time).total_seconds()
+        # FPS of video / FPS of process = Multiplier of our time taken
+        # 1 / self.fps will get us what we "need" to process to hit 1x time
+        processing_fps = None
+        time_multiplier = None
+        if difference != 0:
+            processing_fps = self.count / difference
+            time_multiplier = self.fps / processing_fps
+        # 
         logging.info("Clip completed")
+        if processing_fps is not None:
+            logging.info(f"Processed {self.count} frames. Total seconds: {difference}. Time per frame: {difference/self.count}. {time_multiplier:2.4f}x")
         return 0 
 
 def run_args(zoom_args):
@@ -811,7 +857,7 @@ def run_args(zoom_args):
     ap.add_argument("-r", "--roi_filepath", default=None, help="File containing ROI info. Generated by roi_selector.py")
     ap.add_argument("-o", "--output_filename", default=None, help="Output video file name")
     ap.add_argument("-w", dest="write", default=False, action='store_true', help="Write output to file")
-    ap.add_argument("-d", dest="debug", default=False, action='store_true', help="Debug output. Also will write the Debug frame to a file")
+    ap.add_argument("-d", "--debug", dest="debug", default=False, action='store_true', help="Debug output. Also will write the Debug frame to a file")
     ap.add_argument("-o_e", "--overwrite_existing", default=False, action='store_true', help="Flag to enable overwriting existing files. Default is False")
     ap.add_argument("--show_debug", dest="show_debug", default=False, action='store_true', help="Show live debug output")
     ap.add_argument("--team_one_file", help="Path to file consisting of info for Team 1, on the left", type=str, default=None)
@@ -843,7 +889,7 @@ if __name__ == "__main__":
     ap.add_argument("-r", "--roi_filepath", default=None, help="File containing ROI info. Generated by roi_selector.py")
     ap.add_argument("-o", "--output_filename", default=None, help="Output video file name")
     ap.add_argument("-w", dest="write", default=False, action='store_true', help="Write output to file")
-    ap.add_argument("-d", dest="debug", default=False, action='store_true', help="Debug output. Also will write the Debug frame to a file")
+    ap.add_argument("-d", "--debug", dest="debug", default=False, action='store_true', help="Debug output. Also will write the Debug frame to a file")
     ap.add_argument("-o_e", "--overwrite_existing", default=False, action='store_true', help="Flag to enable overwriting existing files. Default is False")
     ap.add_argument("--show_debug", dest="show_debug", default=False, action='store_true', help="Show live debug output")
     ap.add_argument("--team_one_file", help="Path to file consisting of info for Team 1, on the left", type=str, default=None)
