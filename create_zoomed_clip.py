@@ -16,10 +16,35 @@ from numpy.lib.function_base import append
 from roi_selector import create_roi_from_video, roi_selection, parse_roi_file
 from parse_teams import Team
 import logging
+import threading
+import queue
+
+class ProducerThread(threading.Thread):
+    def __init__(self, q, vs):
+        self.q = q
+        self.vs = vs
+        super(ProducerThread,self).__init__()
+
+    def run(self):
+        # grab the current frame and initialize the occupied/unoccupied
+        frame = self.vs.read()
+        frame = frame if args.get("video", None) is None else frame[1]
+        while frame is not None:
+            logging.debug(f"Adding Frame to queue")
+            # While the queue is full, sleep until it isn't
+            while self.q.full():
+                time.sleep(.2)
+                # logging.info(f"Queue size: {self.q.qsize()}")
+            self.q.put(frame)
+            # if the frame could not be grabbed, then we have reached the end
+            # of the video
+            if frame is None:
+                break
+            frame = self.vs.read()
+            frame = frame if args.get("video", None) is None else frame[1]
 
 
-
-# # This takes in a "target center" and outputs the "actual center"
+# This takes in a "target center" and outputs the "actual center"
 # def find_center_within_bounds(center_x, center_y, target_width, target_height, max_width, max_height):
 #     # Ensure we aren't off the screen to the left
 #     center_x *= ANALYZE_SHRINK_FACTOR
@@ -96,6 +121,183 @@ def draw_debug_text(frame):
 # def main(args):
 
 class ZoomedClipCreator:
+    # This will persist for the entirety of this clip. The Init() should just prep the clip
+    # Another function should do the actual step through of each frame. Each frame should be processed in another function.
+    def __init__(self, args):
+        # Things in self should only be ones that carry across frames
+
+        
+        self.DEBUG = args["debug"]
+        self.QUIET = False
+        if self.DEBUG:
+            self.SHOW_DEBUG = True
+        else:
+            self.SHOW_DEBUG = args["show_debug"]
+
+        if self.DEBUG:
+            logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s %(message)s')
+        else:
+            logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+
+        logging.info("Beginning clip")
+
+
+        # if the video argument is None, then we are reading from webcam
+        if args.get("video", None) is None:
+            raise NotImplemented
+            self.vs = VideoStream(src=0).start()
+            time.sleep(2.0)
+        # otherwise, we are reading from a video file
+        # Create our video reading object, self.vs
+        else:
+            self.vs = cv2.VideoCapture(args["video"])
+        # initialize the first frame in the video stream
+
+
+        self.input_w = int(self.vs.get(cv2.CAP_PROP_FRAME_WIDTH ))
+        self.input_h = int(self.vs.get(cv2.CAP_PROP_FRAME_HEIGHT ))
+        self.frames_count = int(self.vs.get(cv2.CAP_PROP_FRAME_COUNT))
+        # This value is what the video CLAIMS it is. It is not necessarily the truth.
+        self.fps = self.vs.get(cv2.CAP_PROP_FPS)
+        result = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
+                                "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", 
+                                args["video"]],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT)
+        self.duration = "DISABLED"
+        try:
+            self.duration = float(result.stdout.splitlines()[-1])
+            # This causes major issues with concating videos. Need to figure out how to merge video and audio
+            self.fps = self.frames_count / self.duration
+        except ValueError:
+            print("Assigned default fps of 30")
+            self.fps = 30
+
+        print("TESTINGGGGGGGGGGGGGGGGG")
+        logging.info(f"Frames: {self.frames_count} FPS: {self.fps} Duration: {self.duration}s")
+        logging.info(f"Inputs: {self.input_w}x{self.input_h} @ {self.fps} fps")
+
+        # Create a queue to place frames into, limit size to 10? this can probably grow
+        self.q = queue.Queue(10)
+
+        p = ProducerThread(q=self.q, vs=self.vs)
+        p.start()
+        # Give our queue 2 seconds to populate
+        time.sleep(.5)
+
+
+        self.firstFrame = None
+        self.next = None
+
+        self.team_one = None
+        self.team_one_score = None
+        self.team_two = None
+        self.team_two_score = None
+
+        if args.get("team_one_file", None) is not None:
+            self.team_one = Team(args.get("team_one_file"))
+        if args.get("team_one_score", None) is not None:
+            self.team_one_score = args.get("team_one_score", None)
+        if args.get("team_two_file", None) is not None:
+            self.team_two = Team(args.get("team_two_file"))
+        if args.get("team_two_score", None) is not None:
+            self.team_two_score = args.get("team_two_score", None)
+        # Initialize vars
+        self.count = 0
+        self.total_count = 0
+
+        self.center_x = None
+        self.center_y = None
+        self.top_x = None
+        self.top_y = None
+
+        self.smooth_top_x = None
+        self.smooth_top_y = None
+
+        self.new_center = None
+        self.old_center = None
+
+        # We don't care about these in the Y-direction, not enough movement to care.
+        # With these added, we probably want to bump our default max_movement up a little bit from 3.
+        self.velocity = 0
+        self.acceleration = 0
+        self.jerk = 0
+
+        # 1 means the most we change per frame is 1 ? is that sufficient?
+        self.max_acceleration = 1
+        self.max_jerk = 1
+
+        # Maximum movement velocity of the cropped zone per frame.
+        self.MAX_PIXEL_MOVEMENT_X = args["max_camera_movement_x"]
+        # MAX_PIXEL_MOVEMENT_X = 10
+        self.MAX_PIXEL_MOVEMENT_Y = args["max_camera_movement_y"]
+
+        # Transparency level
+        self.TRANSPARENCY = .3
+
+        # Deadzone where the camera doesn't move at all, as long as the center is still within that many pixels.
+        self.DEADZONE_X = args["deadzone_x"]
+        self.DEADZONE_Y = args["deadzone_y"]
+        self.INNER_DEADZONE_X = self.DEADZONE_X // 2
+        self.INNER_DEADZONE_Y = self.DEADZONE_Y // 2
+        self.OUTER_BOUND_BUFFER_X = args["outer_bound_buffer_x"]
+        self.OUTER_BOUND_BUFFER_Y = args["outer_bound_buffer_y"]
+
+        # This value defines if the crop should attempt to keep the video centered on the boxes, or simply stop moving if all the boxes are still inside the crop.
+        self.PREVENT_PAN_WHILE_BOUNDED = False
+        # Flag to disable writing video
+        self.WRITE_VIDEO = args["write"]
+        # Not implemented. How much time would it save us if we only re-calculated the "new-center" every 5 frames, rather than every single frame?
+        self.FRAMES_BETWEEN_RE_COMPARE = 1
+        # self.MAX_PIXEL_MOVEMENT_X *= self.FRAMES_BETWEEN_RE_COMPARE
+        # self.MAX_PIXEL_MOVEMENT_Y *= self.FRAMES_BETWEEN_RE_COMPARE
+        # This flag defines if we are still in the "slow-zoom" phase of a clip.
+        # Does this need to be a counter? Let's do that for now, for flexibility
+        self.ZOOM_IN_DURATION_FRAMES = args["zoomin_duration_frames"]
+
+        self.FILENAME = os.path.basename(os.path.splitext(args["video"])[0])
+        logging.info(f"File: {self.FILENAME}")
+
+        self.mask = None
+
+
+
+        # How much to shrink the raw input for analyzing contours
+        self.ANALYZE_SHRINK_FACTOR = 2
+
+        self.INPUT_SIZE = (self.input_w, self.input_h)
+        self.OUTPUT_SIZE = (1920, 1080)
+
+        self.ZOOM_FACTOR = self.input_w // self.OUTPUT_SIZE[0]
+        # The self.Zoom_factor squared
+        self.ZOOM_FACTOR2 = self.ZOOM_FACTOR*self.ZOOM_FACTOR
+
+        # FORCED_WIDTH = 1920
+        # FORCED_HEIGHT = 1080
+
+        # TODO
+        # Have the zoom-pieces use the shrunken frame (raw_input // 4), but the output video use raw_input // 2 for the zoom factor. Make these factors codeable?
+        if self.WRITE_VIDEO:
+            # If the file already exists, and we are NOT overwriting existing
+            if os.path.exists(args["output_filename"]) and not args["overwrite_existing"]:
+                print("File already exists, and command line arg '--overwrite_existing' is not specified.")
+                raise FileExistsError
+                return 1
+            if args.get("output_filename", None):
+                self.cropped_recording = cv2.VideoWriter(args["output_filename"], cv2.VideoWriter_fourcc(*'MP4V'), self.fps, (self.OUTPUT_SIZE[0], self.OUTPUT_SIZE[1]))
+            else:
+                self.cropped_recording = cv2.VideoWriter(args["video"] + "_canny.mp4", cv2.VideoWriter_fourcc(*'MP4V'), self.fps, (self.OUTPUT_SIZE[0], self.OUTPUT_SIZE[1]))
+        if self.DEBUG:
+            self.live_recording = cv2.VideoWriter(args["video"] + "_debug.mp4", cv2.VideoWriter_fourcc(*'MP4V'), self.fps, (self.input_w // self.ANALYZE_SHRINK_FACTOR, self.input_h // self.ANALYZE_SHRINK_FACTOR))
+
+        # print(f"Beginning looping @ {datetime.datetime.now()}")
+        logging.info("Beginning looping")
+
+        # This should be set to true if we are moving while outside of the deadzone. 
+        # If the flag is true, we want to continue to move towards the center, until we are within INNER_DEADZONE distance. Then the flag can be reset to False
+        self.find_inner_deadzone = False
+
+        self.process_video()
 
     # Returns the mask and the ROI corners
     def generate_roi_mask(self, roi_filepath, frame):
@@ -233,179 +435,21 @@ class ZoomedClipCreator:
 
         # TODO Add code for "If something is out on BOTH sides, we need to zoom out"
 
-    # This will persist for the entirety of this clip. The Init() should just prep the clip
-    # Another function should do the actual step through of each frame. Each frame should be processed in another function.
-    def __init__(self, args):
-        # Things in self. should only be ones that carry across frames
-        self.DEBUG = args["debug"]
-        self.QUIET = True
-        if self.DEBUG:
-            self.SHOW_DEBUG = True
-        else:
-            self.SHOW_DEBUG = args["show_debug"]
-
-        if self.DEBUG:
-            logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s %(message)s')
-        else:
-            logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
-
-        logging.info("Beginning clip")
-
-        # if the video argument is None, then we are reading from webcam
-        if args.get("video", None) is None:
-            raise NotImplemented
-            self.vs = VideoStream(src=0).start()
-            time.sleep(2.0)
-        # otherwise, we are reading from a video file
-        else:
-            self.vs = cv2.VideoCapture(args["video"])
-        # initialize the first frame in the video stream
-        self.firstFrame = None
-        self.next = None
-
-        self.team_one = None
-        self.team_one_score = None
-        self.team_two = None
-        self.team_two_score = None
-
-        if args.get("team_one_file", None) is not None:
-            self.team_one = Team(args.get("team_one_file"))
-        if args.get("team_one_score", None) is not None:
-            self.team_one_score = args.get("team_one_score", None)
-        if args.get("team_two_file", None) is not None:
-            self.team_two = Team(args.get("team_two_file"))
-        if args.get("team_two_score", None) is not None:
-            self.team_two_score = args.get("team_two_score", None)
-        # Initialize vars
-        self.count = 0
-        self.total_count = 0
-
-        self.center_x = None
-        self.center_y = None
-        self.top_x = None
-        self.top_y = None
-
-        self.smooth_top_x = None
-        self.smooth_top_y = None
-
-        self.new_center = None
-        self.old_center = None
-
-        # We don't care about these in the Y-direction, not enough movement to care.
-        # With these added, we probably want to bump our default max_movement up a little bit from 3.
-        self.velocity = 0
-        self.acceleration = 0
-        self.jerk = 0
-
-        # 1 means the most we change per frame is 1 ? is that sufficient?
-        self.max_acceleration = 1
-        self.max_jerk = 1
-
-        # Maximum movement velocity of the cropped zone per frame.
-        self.MAX_PIXEL_MOVEMENT_X = args["max_camera_movement_x"]
-        # MAX_PIXEL_MOVEMENT_X = 10
-        self.MAX_PIXEL_MOVEMENT_Y = args["max_camera_movement_y"]
-
-        # Transparency level
-        self.TRANSPARENCY = .3
-
-        # Deadzone where the camera doesn't move at all, as long as the center is still within that many pixels.
-        self.DEADZONE_X = args["deadzone_x"]
-        self.DEADZONE_Y = args["deadzone_y"]
-        self.INNER_DEADZONE_X = self.DEADZONE_X // 2
-        self.INNER_DEADZONE_Y = self.DEADZONE_Y // 2
-        self.OUTER_BOUND_BUFFER_X = args["outer_bound_buffer_x"]
-        self.OUTER_BOUND_BUFFER_Y = args["outer_bound_buffer_y"]
-
-        # This value defines if the crop should attempt to keep the video centered on the boxes, or simply stop moving if all the boxes are still inside the crop.
-        self.PREVENT_PAN_WHILE_BOUNDED = False
-        # Flag to disable writing video
-        self.WRITE_VIDEO = args["write"]
-        # Not implemented. How much time would it save us if we only re-calculated the "new-center" every 5 frames, rather than every single frame?
-        self.FRAMES_BETWEEN_RE_COMPARE = 1
-        self.MAX_PIXEL_MOVEMENT_X *= self.FRAMES_BETWEEN_RE_COMPARE
-        self.MAX_PIXEL_MOVEMENT_Y *= self.FRAMES_BETWEEN_RE_COMPARE
-        # This flag defines if we are still in the "slow-zoom" phase of a clip.
-        # Does this need to be a counter? Let's do that for now, for flexibility
-        self.ZOOM_IN_DURATION_FRAMES = args["zoomin_duration_frames"]
-
-        self.FILENAME = os.path.basename(os.path.splitext(args["video"])[0])
-        logging.info(f"File: {self.FILENAME}")
-
-        self.input_w = int(self.vs.get(cv2.CAP_PROP_FRAME_WIDTH ))
-        self.input_h = int(self.vs.get(cv2.CAP_PROP_FRAME_HEIGHT ))
-        self.frames_count = int(self.vs.get(cv2.CAP_PROP_FRAME_COUNT))
-        # This value is what the video CLAIMS it is. It is not necessarily the truth.
-        self.fps = self.vs.get(cv2.CAP_PROP_FPS)
-        result = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
-                                "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", 
-                                args["video"]],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT)
-        self.duration = "DISABLED"
-        try:
-            self.duration = float(result.stdout.splitlines()[-1])
-            # This causes major issues with concating videos. Need to figure out how to merge video and audio
-            self.fps = self.frames_count / self.duration
-        except ValueError:
-            print("Assigned default fps of 30")
-            self.fps = 30
-
-        logging.info(f"Frames: {self.frames_count} FPS: {self.fps} Duration: {self.duration}s")
-        logging.info(f"Inputs: {self.input_w}x{self.input_h} @ {self.fps} fps")
-
-        self.mask = None
-
-
-
-        # How much to shrink the raw input for analyzing contours
-        self.ANALYZE_SHRINK_FACTOR = 2
-
-        self.INPUT_SIZE = (self.input_w, self.input_h)
-        self.OUTPUT_SIZE = (1920, 1080)
-
-        self.ZOOM_FACTOR = self.input_w // self.OUTPUT_SIZE[0]
-        # The self.Zoom_factor squared
-        self.ZOOM_FACTOR2 = self.ZOOM_FACTOR*self.ZOOM_FACTOR
-
-        # FORCED_WIDTH = 1920
-        # FORCED_HEIGHT = 1080
-
-        # TODO
-        # Have the zoom-pieces use the shrunken frame (raw_input // 4), but the output video use raw_input // 2 for the zoom factor. Make these factors codeable?
-        if self.WRITE_VIDEO:
-            # If the file already exists, and we are NOT overwriting existing
-            if os.path.exists(args["output_filename"]) and not args["overwrite_existing"]:
-                print("File already exists, and command line arg '--overwrite_existing' is not specified.")
-                # raise FileExistsError
-                return 1
-            if args.get("output_filename", None):
-                self.cropped_recording = cv2.VideoWriter(args["output_filename"], cv2.VideoWriter_fourcc(*'MP4V'), self.fps, (self.OUTPUT_SIZE[0], self.OUTPUT_SIZE[1]))
-            else:
-                self.cropped_recording = cv2.VideoWriter(args["video"] + "_canny.mp4", cv2.VideoWriter_fourcc(*'MP4V'), self.fps, (self.OUTPUT_SIZE[0], self.OUTPUT_SIZE[1]))
-        if self.DEBUG:
-            self.live_recording = cv2.VideoWriter(args["video"] + "_debug.mp4", cv2.VideoWriter_fourcc(*'MP4V'), self.fps, (self.input_w // self.ANALYZE_SHRINK_FACTOR, self.input_h // self.ANALYZE_SHRINK_FACTOR))
-
-        # print(f"Beginning looping @ {datetime.datetime.now()}")
-        logging.info("Beginning looping")
-
-        # This should be set to true if we are moving while outside of the deadzone. 
-        # If the flag is true, we want to continue to move towards the center, until we are within INNER_DEADZONE distance. Then the flag can be reset to False
-        self.find_inner_deadzone = False
-
-        self.process_video()
-
     def process_video(self):
         self.process_start_time = datetime.datetime.now()
         # loop over the frames of the video
-        while True:
+        # while True:
+        while not self.q.empty():
+            # Prep this value as we use it to decide what to do 
+            canny_min_x = None
             # print("LINE")
             logging.debug(f"Starting New Frame")
                 # print(f"\r{total_count:08d} frames / {int(total_count // fps):04d} seconds", end='')
             args["skip_starting_frames"] = 0
             # grab the current frame and initialize the occupied/unoccupied
-            self.frame = self.vs.read()
-            self.frame = self.frame if args.get("video", None) is None else self.frame[1]
+            self.frame = self.q.get()
+            # self.frame = self.vs.read()
+            # self.frame = self.frame if args.get("video", None) is None else self.frame[1]
             logging.debug(f"Making copies and resizing")
             # if the frame could not be grabbed, then we have reached the end
             # of the video
@@ -446,7 +490,7 @@ class ZoomedClipCreator:
                 else:
                     roi_file = create_roi_from_video(args["video"])
                     self.mask, self.roi_corners = self.generate_roi_mask(roi_file, self.frame)
-                bw_mask = cv2.cvtColor(self.mask, cv2.COLOR_BGR2GRAY)
+                self.bw_mask = cv2.cvtColor(self.mask, cv2.COLOR_BGR2GRAY)
                 # Create a different mask to avoid breaking the one that is re-used on each frame
                 m2 = np.array(self.mask, dtype=np.float) # .017 secs
                 # Convert to BGR values
@@ -458,18 +502,20 @@ class ZoomedClipCreator:
                 logging.debug("Done creating mask")
 
 
-
-            logging.debug("Running Canny detection")
-            self.canny = self.frame.copy()
-            self.canny = cv2.Canny(self.canny, 240, 250)
-            # print(frame)
-            # print(canny.shape)
-            # print(mask.shape)
-            self.canny = cv2.bitwise_and(self.canny, bw_mask)
-            logging.debug("Find Dilated Canny contours")
-            # Dilate the image to fill in gaps, then find contours
-            # if self.total_count % self.FRAMES_BETWEEN_RE_COMPARE != 0:
-            canny_min_x, canny_max_x, canny_min_y, canny_max_y, thresh = find_dilated_canny_contours(self.canny, self.input_w, self.input_h, args)
+            # If we are on the Xth frame, thus meaning we should do a re-compare, enter this block
+            if self.total_count % self.FRAMES_BETWEEN_RE_COMPARE == 0:
+                logging.debug("Running Canny detection")
+                self.canny = self.frame.copy()
+                self.canny = cv2.Canny(self.canny, 240, 250)
+                # print(frame)
+                # print(canny.shape)
+                # print(mask.shape)
+                self.canny = cv2.bitwise_and(self.canny, self.bw_mask)
+                logging.debug("Find Dilated Canny contours")
+                # Dilate the image to fill in gaps, then find contours
+                canny_min_x, canny_max_x, canny_min_y, canny_max_y, thresh = find_dilated_canny_contours(self.canny, self.input_w, self.input_h, args)
+            else:
+                logging.debug("Skipping Canny detection due to between frames")
 
             # Draw a line from roi_cones[0] to roi_cones[2]
             # Draws a line on each sideline.
@@ -524,31 +570,48 @@ class ZoomedClipCreator:
                 x_max = None
                 y_max = None
 
-            logging.debug(f"Starting to locate camera-center processing")
-            # If we didn't find any Canny Edges, OR we are skipping frames between recompares, re-use values from prior
+            logging.debug(f"Starting to locate camera-center processing {self.total_count}%{self.FRAMES_BETWEEN_RE_COMPARE}={self.total_count % self.FRAMES_BETWEEN_RE_COMPARE}")
+            # If we didn't find any Canny Edges
+            # OR we are on a skip frame
+            # logging.debug(f"{self.center_x}, {self.center_y}")
             if not canny_min_x or self.total_count % self.FRAMES_BETWEEN_RE_COMPARE != 0:
                 # print("REUSING OLD CENTER")
                 # print("NO Canny Edges found")
                 # If we had previous values to use, then produce an object from those
-                if self.DEBUG and center_x and center_y:
-                    # Draw a green center-dot where the center of the edges are. This matches the Green Box that defines this point
-                    cv2.rectangle(self.frame, (center_x-1, center_y-1), (center_x+1, center_y+1), (0, 255, 0), 2)
-                    # Draw a blue box showing the cropped section
-                    cv2.rectangle(self.frame, (top_x, top_y), (top_x + self.input_w//self.ZOOM_FACTOR, top_y + self.input_h//self.ZOOM_FACTOR), (255, 0, 0), 2)
-                    self.frame = cv2.putText(self.frame, 'Cropped frame', (top_x, top_y-5), cv2.FONT_HERSHEY_DUPLEX, .5, (0,0,0), 2)
-                    self.frame = cv2.putText(self.frame, 'Cropped frame', (top_x, top_y-5), cv2.FONT_HERSHEY_DUPLEX, .5, (255,0,0), 1)
+                if self.DEBUG and self.center_x and self.center_y:
+                    pass
+                    # # Draw a green center-dot where the center of the edges are. This matches the Green Box that defines this point
+                    # cv2.rectangle(self.frame, (self.center_x-1, self.center_y-1), (self.center_x+1, self.center_y+1), (0, 255, 0), 2)
+                    # # Draw a blue box showing the cropped section
+                    # cv2.rectangle(self.frame, (top_x, top_y), (top_x + self.input_w//self.ZOOM_FACTOR, top_y + self.input_h//self.ZOOM_FACTOR), (255, 0, 0), 2)
+                    # self.frame = cv2.putText(self.frame, 'Cropped frame', (top_x, top_y-5), cv2.FONT_HERSHEY_DUPLEX, .5, (0,0,0), 2)
+                    # self.frame = cv2.putText(self.frame, 'Cropped frame', (top_x, top_y-5), cv2.FONT_HERSHEY_DUPLEX, .5, (255,0,0), 1)
+                # If we have previous values to use
+                if False and self.center_x and self.center_y:
+                    if self.WRITE_VIDEO:
+                        # Resize the frame
+                        self.frame = cv2.resize(self.frame, (self.OUTPUT_SIZE[0], self.OUTPUT_SIZE[1]))
+                        # Write the clip name on the frame, before sending to file
+                        self.frame = cv2.putText(self.frame, self.FILENAME, (5, self.OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (0, 0, 0), 3)
+                        self.frame = cv2.putText(self.frame, self.FILENAME, (5, self.OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (255, 255, 255), 1)
+                        cv2.imshow("Cropped", self.frame)
+                        self.cropped_recording.write(self.frame)
                 # If we did not have previous values to use, write out the full frame. This should only ever occur on the very first frame(s).
-                if not (center_x and center_y):
+                if not (self.center_x and self.center_y):
                     logging.warning("WRITING BAD OUTPUT")
                     # raise ValueError("No canny edges detected in frame, and no center yet produced")
                     # Write the current image to the video file
                     if self.WRITE_VIDEO:
+                        # Resize the frame
                         self.frame = cv2.resize(self.frame, (self.OUTPUT_SIZE[0], self.OUTPUT_SIZE[1]))
                         # Write the clip name on the frame, before sending to file
                         self.frame = cv2.putText(self.frame, self.FILENAME, (5, self.OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (0, 0, 0), 3)
                         self.frame = cv2.putText(self.frame, self.FILENAME, (5, self.OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (255, 255, 255), 1)
                         self.cropped_recording.write(self.frame)
+                    self.count += 1
+                    self.total_count += 1
                     continue
+            # If we are on a Process frame, and canny_min_x does exist
             else:
                 # Get the corners of the contours that were located. x+w, y+h
                 x_min = canny_min_x
@@ -557,11 +620,11 @@ class ZoomedClipCreator:
                 y_max = canny_max_y
                 # print(x_min, x_max, y_min, y_max)
                 # Calculate the center and top_corner values for drawing boxes
-                center_x = (x_max + x_min)//2
-                top_x = max(center_x - (self.input_w // self.ZOOM_FACTOR), 0)
-                center_y = (y_max + y_min)//2
-                top_y = max(center_y - (self.input_h // self.ZOOM_FACTOR), 0)
-                self.new_center = [center_x, center_y]
+                self.center_x = (x_max + x_min)//2
+                self.top_x = max(self.center_x - (self.input_w // self.ZOOM_FACTOR), 0)
+                self.center_y = (y_max + y_min)//2
+                self.top_y = max(self.center_y - (self.input_h // self.ZOOM_FACTOR), 0)
+                self.new_center = [self.center_x, self.center_y]
                 # This only triggers on first frame
                 if not self.old_center:
                     self.old_center = self.new_center
@@ -576,20 +639,16 @@ class ZoomedClipCreator:
 
                 # 1) Are we near the center? If yes, stay there
 
-
-
-
                 canny_coords = (x_min, y_max, x_max, y_min)
-                # TODO this should all be 1 function 
-
-
+                # This contains the actual code that shifts us from old -> new
+                # When doing our skip-frames, we need to still update those, but just wont have canny-coords? maybe?
+                # We should have a SEPARATE FUNCTION - "are we still within the bounds? okay skip all the manipulation stuff"
+                # Then we can call this function if we are NOT within the bounds.
+                # Why is the "check if we're in bounds" inside the "find new center" anyways, kinda separate tasks. 
+                # This function should _ONLY_ handle our movement, and how limited we are.
+                # Then this function is also simpler, because we can have it ONLY handle Velocity-Accel-Jerk
+                # But we do _always_ need to update VAJ every frame, which makes this a bit messy
                 self.find_new_center_from_old(canny_coords=canny_coords)
-
-                # TODO until here, should be 1 function. Take in Old_Center, calculate New_Center based on internal parameters
-
-
-
-
 
             # Once we have determined a target point, begin to show the preview and write to a file
             if True: # smooth_top_x is not None:
@@ -655,6 +714,8 @@ class ZoomedClipCreator:
                 # cropped_y2 needs to be larger, towards the 4k bound (2160?) INPUT_WIDTH[1]
                 # And then resize it to self.OUTPUT_SIZE[0]
                 # A linear scaling. We might want to make this do a quicker zoom initially, and then slow down as it approaches. Log-scale?
+
+                # TODO this should be function
                 if self.ZOOM_IN_DURATION_FRAMES == -1 or (self.total_count > 0 and self.total_count < self.ZOOM_IN_DURATION_FRAMES):
                     percent_from_edge = 1 - (self.total_count / self.ZOOM_IN_DURATION_FRAMES)
                     if self.ZOOM_IN_DURATION_FRAMES == -1:
@@ -684,7 +745,7 @@ class ZoomedClipCreator:
                 self.cropped = cv2.putText(self.cropped, self.FILENAME, (5, self.OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (0, 0, 0), 3)
                 self.cropped = cv2.putText(self.cropped, self.FILENAME, (5, self.OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (255, 255, 255), 1)
                 # if DRAW_SCOREBOARD
-                # TODO we should put some format in the Timestamps file to place score 
+                # TODO This needs to be a function
                 SCOREBOARD_WIDTH = 600
                 HALF_SCOREBOARD_WIDTH = SCOREBOARD_WIDTH // 2
                 SCORE_SECTION_WIDTH = HALF_SCOREBOARD_WIDTH // 6
@@ -780,7 +841,7 @@ class ZoomedClipCreator:
                     # This draws a box showing what the Cropped Image will contain
                     # cv2.rectangle(frame, (smooth_top_x * ANALYZE_SHRINK_FACTOR * self.ZOOM_FACTOR, smooth_top_y * ANALYZE_SHRINK_FACTOR * self.ZOOM_FACTOR), (smooth_top_x + FORCED_WIDTH//(self.ZOOM_FACTOR * ANALYZE_SHRINK_FACTOR), smooth_top_y + FORCED_HEIGHT//(self.ZOOM_FACTOR * ANALYZE_SHRINK_FACTOR)), (255, 255, 255), 2)
                     # Draw a pixel at the center of the in-the-moment edges
-                    cv2.rectangle(self.frame, (center_x-1, center_y-1), (center_x+1, center_y+1), (0, 0, 255), 1)
+                    cv2.rectangle(self.frame, (self.center_x-1, self.center_y-1), (self.center_x+1, self.center_y+1), (0, 0, 255), 1)
 
                 
                 # 6) De-Adjust for the next loop?
