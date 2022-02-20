@@ -20,28 +20,30 @@ import threading
 import queue
 
 class ProducerThread(threading.Thread):
-    def __init__(self, q, vs):
+    def __init__(self, q, vs, args):
         self.q = q
         self.vs = vs
+        self.args = args
         super(ProducerThread,self).__init__()
 
     def run(self):
-        # grab the current frame and initialize the occupied/unoccupied
+        # Read the first frame before we enter our while loop
         frame = self.vs.read()
-        frame = frame if args.get("video", None) is None else frame[1]
+        frame = frame if self.args.get("video", None) is None else frame[1]
         while frame is not None:
-            logging.debug(f"Adding Frame to queue")
-            # While the queue is full, sleep until it isn't
-            while self.q.full():
+            logging.debug(f"Adding Frame to queue {self.q.qsize()}")
+            # While the queue has more than 10 frames in it, wait until we have less
+            while self.q.qsize() > 15:
                 time.sleep(.2)
                 # logging.info(f"Queue size: {self.q.qsize()}")
             self.q.put(frame)
+            self.q.put(frame.copy())
             # if the frame could not be grabbed, then we have reached the end
             # of the video
             if frame is None:
                 break
             frame = self.vs.read()
-            frame = frame if args.get("video", None) is None else frame[1]
+            frame = frame if self.args.get("video", None) is None else frame[1]
 
 
 # This takes in a "target center" and outputs the "actual center"
@@ -118,7 +120,7 @@ def draw_debug_text(frame):
     return frame
 
 
-# def main(args):
+# def main(self.args):
 
 class ZoomedClipCreator:
     # This will persist for the entirety of this clip. The Init() should just prep the clip
@@ -126,13 +128,14 @@ class ZoomedClipCreator:
     def __init__(self, args):
         # Things in self should only be ones that carry across frames
 
+        self.args = args
         
-        self.DEBUG = args["debug"]
-        self.QUIET = False
+        self.DEBUG = self.args["debug"]
+        self.QUIET = self.args["quiet"]
         if self.DEBUG:
             self.SHOW_DEBUG = True
         else:
-            self.SHOW_DEBUG = args["show_debug"]
+            self.SHOW_DEBUG = self.args["show_debug"]
 
         if self.DEBUG:
             logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s %(message)s')
@@ -143,14 +146,14 @@ class ZoomedClipCreator:
 
 
         # if the video argument is None, then we are reading from webcam
-        if args.get("video", None) is None:
+        if self.args.get("video", None) is None:
             raise NotImplemented
             self.vs = VideoStream(src=0).start()
             time.sleep(2.0)
         # otherwise, we are reading from a video file
         # Create our video reading object, self.vs
         else:
-            self.vs = cv2.VideoCapture(args["video"])
+            self.vs = cv2.VideoCapture(self.args["video"])
         # initialize the first frame in the video stream
 
 
@@ -161,7 +164,7 @@ class ZoomedClipCreator:
         self.fps = self.vs.get(cv2.CAP_PROP_FPS)
         result = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
                                 "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", 
-                                args["video"]],
+                                self.args["video"]],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT)
         self.duration = "DISABLED"
@@ -173,15 +176,14 @@ class ZoomedClipCreator:
             print("Assigned default fps of 30")
             self.fps = 30
 
-        print("TESTINGGGGGGGGGGGGGGGGG")
         logging.info(f"Frames: {self.frames_count} FPS: {self.fps} Duration: {self.duration}s")
         logging.info(f"Inputs: {self.input_w}x{self.input_h} @ {self.fps} fps")
 
         # Create a queue to place frames into, limit size to 10? this can probably grow
-        self.q = queue.Queue(10)
+        self.q = queue.Queue(30)
 
-        p = ProducerThread(q=self.q, vs=self.vs)
-        p.start()
+        self.p = ProducerThread(q=self.q, vs=self.vs, args=self.args)
+        self.p.start()
         # Give our queue 2 seconds to populate
         time.sleep(.5)
 
@@ -194,14 +196,14 @@ class ZoomedClipCreator:
         self.team_two = None
         self.team_two_score = None
 
-        if args.get("team_one_file", None) is not None:
-            self.team_one = Team(args.get("team_one_file"))
-        if args.get("team_one_score", None) is not None:
-            self.team_one_score = args.get("team_one_score", None)
-        if args.get("team_two_file", None) is not None:
-            self.team_two = Team(args.get("team_two_file"))
-        if args.get("team_two_score", None) is not None:
-            self.team_two_score = args.get("team_two_score", None)
+        if self.args.get("team_one_file", None) is not None:
+            self.team_one = Team(self.args.get("team_one_file"))
+        if self.args.get("team_one_score", None) is not None:
+            self.team_one_score = self.args.get("team_one_score", None)
+        if self.args.get("team_two_file", None) is not None:
+            self.team_two = Team(self.args.get("team_two_file"))
+        if self.args.get("team_two_score", None) is not None:
+            self.team_two_score = self.args.get("team_two_score", None)
         # Initialize vars
         self.count = 0
         self.total_count = 0
@@ -228,34 +230,34 @@ class ZoomedClipCreator:
         self.max_jerk = 1
 
         # Maximum movement velocity of the cropped zone per frame.
-        self.MAX_PIXEL_MOVEMENT_X = args["max_camera_movement_x"]
+        self.MAX_PIXEL_MOVEMENT_X = self.args["max_camera_movement_x"]
         # MAX_PIXEL_MOVEMENT_X = 10
-        self.MAX_PIXEL_MOVEMENT_Y = args["max_camera_movement_y"]
+        self.MAX_PIXEL_MOVEMENT_Y = self.args["max_camera_movement_y"]
 
         # Transparency level
         self.TRANSPARENCY = .3
 
         # Deadzone where the camera doesn't move at all, as long as the center is still within that many pixels.
-        self.DEADZONE_X = args["deadzone_x"]
-        self.DEADZONE_Y = args["deadzone_y"]
+        self.DEADZONE_X = self.args["deadzone_x"]
+        self.DEADZONE_Y = self.args["deadzone_y"]
         self.INNER_DEADZONE_X = self.DEADZONE_X // 2
         self.INNER_DEADZONE_Y = self.DEADZONE_Y // 2
-        self.OUTER_BOUND_BUFFER_X = args["outer_bound_buffer_x"]
-        self.OUTER_BOUND_BUFFER_Y = args["outer_bound_buffer_y"]
+        self.OUTER_BOUND_BUFFER_X = self.args["outer_bound_buffer_x"]
+        self.OUTER_BOUND_BUFFER_Y = self.args["outer_bound_buffer_y"]
 
         # This value defines if the crop should attempt to keep the video centered on the boxes, or simply stop moving if all the boxes are still inside the crop.
         self.PREVENT_PAN_WHILE_BOUNDED = False
         # Flag to disable writing video
-        self.WRITE_VIDEO = args["write"]
+        self.WRITE_VIDEO = self.args["write"]
         # Not implemented. How much time would it save us if we only re-calculated the "new-center" every 5 frames, rather than every single frame?
         self.FRAMES_BETWEEN_RE_COMPARE = 1
         # self.MAX_PIXEL_MOVEMENT_X *= self.FRAMES_BETWEEN_RE_COMPARE
         # self.MAX_PIXEL_MOVEMENT_Y *= self.FRAMES_BETWEEN_RE_COMPARE
         # This flag defines if we are still in the "slow-zoom" phase of a clip.
         # Does this need to be a counter? Let's do that for now, for flexibility
-        self.ZOOM_IN_DURATION_FRAMES = args["zoomin_duration_frames"]
+        self.ZOOM_IN_DURATION_FRAMES = self.args["zoomin_duration_frames"]
 
-        self.FILENAME = os.path.basename(os.path.splitext(args["video"])[0])
+        self.FILENAME = os.path.basename(os.path.splitext(self.args["video"])[0])
         logging.info(f"File: {self.FILENAME}")
 
         self.mask = None
@@ -279,16 +281,16 @@ class ZoomedClipCreator:
         # Have the zoom-pieces use the shrunken frame (raw_input // 4), but the output video use raw_input // 2 for the zoom factor. Make these factors codeable?
         if self.WRITE_VIDEO:
             # If the file already exists, and we are NOT overwriting existing
-            if os.path.exists(args["output_filename"]) and not args["overwrite_existing"]:
-                print("File already exists, and command line arg '--overwrite_existing' is not specified.")
+            if os.path.exists(self.args["output_filename"]) and not self.args["overwrite_existing"]:
+                logging.error(f"File {self.args['output_filename']} already exists, and command line arg '--overwrite_existing' is not specified.")
                 raise FileExistsError
                 return 1
-            if args.get("output_filename", None):
-                self.cropped_recording = cv2.VideoWriter(args["output_filename"], cv2.VideoWriter_fourcc(*'MP4V'), self.fps, (self.OUTPUT_SIZE[0], self.OUTPUT_SIZE[1]))
+            if self.args.get("output_filename", None):
+                self.cropped_recording = cv2.VideoWriter(self.args["output_filename"], cv2.VideoWriter_fourcc(*'MP4V'), self.fps, (self.OUTPUT_SIZE[0], self.OUTPUT_SIZE[1]))
             else:
-                self.cropped_recording = cv2.VideoWriter(args["video"] + "_canny.mp4", cv2.VideoWriter_fourcc(*'MP4V'), self.fps, (self.OUTPUT_SIZE[0], self.OUTPUT_SIZE[1]))
+                self.cropped_recording = cv2.VideoWriter(self.args["video"] + "_canny.mp4", cv2.VideoWriter_fourcc(*'MP4V'), self.fps, (self.OUTPUT_SIZE[0], self.OUTPUT_SIZE[1]))
         if self.DEBUG:
-            self.live_recording = cv2.VideoWriter(args["video"] + "_debug.mp4", cv2.VideoWriter_fourcc(*'MP4V'), self.fps, (self.input_w // self.ANALYZE_SHRINK_FACTOR, self.input_h // self.ANALYZE_SHRINK_FACTOR))
+            self.live_recording = cv2.VideoWriter(self.args["video"] + "_debug.mp4", cv2.VideoWriter_fourcc(*'MP4V'), self.fps, (self.input_w // self.ANALYZE_SHRINK_FACTOR, self.input_h // self.ANALYZE_SHRINK_FACTOR))
 
         # print(f"Beginning looping @ {datetime.datetime.now()}")
         logging.info("Beginning looping")
@@ -439,27 +441,27 @@ class ZoomedClipCreator:
         self.process_start_time = datetime.datetime.now()
         # loop over the frames of the video
         # while True:
-        while not self.q.empty():
+        # While we still have frames in the queue...
+        while self.p.is_alive(): # not self.q.empty():
             # Prep this value as we use it to decide what to do 
             canny_min_x = None
             # print("LINE")
             logging.debug(f"Starting New Frame")
                 # print(f"\r{total_count:08d} frames / {int(total_count // fps):04d} seconds", end='')
-            args["skip_starting_frames"] = 0
+            self.args["skip_starting_frames"] = 0
             # grab the current frame and initialize the occupied/unoccupied
             self.frame = self.q.get()
+            # Copy the frame to be used by the cropped segment, to prevent losing any detail
+            # We double populated the queue, so we can now make a copy
+            self.cropped = self.q.get()
             # self.frame = self.vs.read()
-            # self.frame = self.frame if args.get("video", None) is None else self.frame[1]
-            logging.debug(f"Making copies and resizing")
+            # self.frame = self.frame if self.args.get("video", None) is None else self.frame[1]
+            # logging.debug(f"Making copies and resizing")
             # if the frame could not be grabbed, then we have reached the end
             # of the video
             if self.frame is None:
                 break
 
-            
-            # Copy the frame to be used by the cropped segment, to prevent losing any detail
-            self.cropped = self.frame.copy()
-            
             # resize the frame, convert it to grayscale, and blur it
             # 960 is 1/4 of 4k
             # frame = imutils.resize(frame, width=960)
@@ -484,11 +486,11 @@ class ZoomedClipCreator:
                 # self.mask = self.create_roi_mask(roi_filepath)
                 logging.debug("Creating mask")
                 # If we were passed an ROI filepath, use that
-                if args.get("roi_filepath", None):
-                    self.mask, self.roi_corners = self.generate_roi_mask(args["roi_filepath"], self.frame)
+                if self.args.get("roi_filepath", None):
+                    self.mask, self.roi_corners = self.generate_roi_mask(self.args["roi_filepath"], self.frame)
                 # Otherwise, we need to create an ROI file 
                 else:
-                    roi_file = create_roi_from_video(args["video"])
+                    roi_file = create_roi_from_video(self.args["video"])
                     self.mask, self.roi_corners = self.generate_roi_mask(roi_file, self.frame)
                 self.bw_mask = cv2.cvtColor(self.mask, cv2.COLOR_BGR2GRAY)
                 # Create a different mask to avoid breaking the one that is re-used on each frame
@@ -513,7 +515,7 @@ class ZoomedClipCreator:
                 self.canny = cv2.bitwise_and(self.canny, self.bw_mask)
                 logging.debug("Find Dilated Canny contours")
                 # Dilate the image to fill in gaps, then find contours
-                canny_min_x, canny_max_x, canny_min_y, canny_max_y, thresh = find_dilated_canny_contours(self.canny, self.input_w, self.input_h, args)
+                canny_min_x, canny_max_x, canny_min_y, canny_max_y, thresh = find_dilated_canny_contours(self.canny, self.input_w, self.input_h, self.args)
             else:
                 logging.debug("Skipping Canny detection due to between frames")
 
@@ -676,8 +678,8 @@ class ZoomedClipCreator:
                     crop_height = crop_width * 9 // 16
 
                 # 4) Adjust based on the offset_x and offset_y arguments
-                self.new_center[0] += args["offset_x"]
-                self.new_center[1] += args["offset_y"]
+                self.new_center[0] += self.args["offset_x"]
+                self.new_center[1] += self.args["offset_y"]
                 # self.OUTPUT_SIZE 0 and 1 should be replaced with the new value of "zoom_target width and height"
                 # tl, br = find_center_within_bounds(new_center[0], new_center[1], max(x_max - x_min, self.OUTPUT_SIZE[0]), max(y_max - y_min, self.OUTPUT_SIZE[1]), INPUT_SIZE[0], INPUT_SIZE[1])
                 # 5) Ensure we aren't off the screen to the left
@@ -845,8 +847,8 @@ class ZoomedClipCreator:
 
                 
                 # 6) De-Adjust for the next loop?
-                self.new_center[0] -= args["offset_x"]
-                self.new_center[1] -= args["offset_y"]
+                self.new_center[0] -= self.args["offset_x"]
+                self.new_center[1] -= self.args["offset_y"]
 
                 # If we want to keep our debug output, write the "live" frame to a debug file
                 if self.DEBUG:
@@ -880,7 +882,7 @@ class ZoomedClipCreator:
             self.cropped_recording.release()
         if self.DEBUG:
             self.live_recording.release()
-        self.vs.stop() if args.get("video", None) is None else self.vs.release()
+        self.vs.stop() if self.args.get("video", None) is None else self.vs.release()
 
         cv2.destroyAllWindows()
         self.process_end_time = datetime.datetime.now()
@@ -919,6 +921,7 @@ def run_args(zoom_args):
     ap.add_argument("-o", "--output_filename", default=None, help="Output video file name")
     ap.add_argument("-w", dest="write", default=False, action='store_true', help="Write output to file")
     ap.add_argument("-d", "--debug", dest="debug", default=False, action='store_true', help="Debug output. Also will write the Debug frame to a file")
+    ap.add_argument("-q", "--quiet", dest="quiet", default=False, action='store_true', help="Prevent showing video preview. This can speed up processing.")
     ap.add_argument("-o_e", "--overwrite_existing", default=False, action='store_true', help="Flag to enable overwriting existing files. Default is False")
     ap.add_argument("--show_debug", dest="show_debug", default=False, action='store_true', help="Show live debug output")
     ap.add_argument("--team_one_file", help="Path to file consisting of info for Team 1, on the left", type=str, default=None)
@@ -929,7 +932,7 @@ def run_args(zoom_args):
     print(args)
     z = ZoomedClipCreator(args)
     return z.process_video()
-    # return main(args)
+    # return main(self.args)
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
@@ -951,6 +954,7 @@ if __name__ == "__main__":
     ap.add_argument("-o", "--output_filename", default=None, help="Output video file name")
     ap.add_argument("-w", dest="write", default=False, action='store_true', help="Write output to file")
     ap.add_argument("-d", "--debug", dest="debug", default=False, action='store_true', help="Debug output. Also will write the Debug frame to a file")
+    ap.add_argument("-q", "--quiet", dest="quiet", default=False, action='store_true', help="Prevent showing video preview. This can speed up processing.")
     ap.add_argument("-o_e", "--overwrite_existing", default=False, action='store_true', help="Flag to enable overwriting existing files. Default is False")
     ap.add_argument("--show_debug", dest="show_debug", default=False, action='store_true', help="Show live debug output")
     ap.add_argument("--team_one_file", help="Path to file consisting of info for Team 1, on the left", type=str, default=None)
@@ -961,4 +965,4 @@ if __name__ == "__main__":
 
     z = ZoomedClipCreator(args)
     z.process_video()
-    # main(args)
+    # main(self.args)
