@@ -31,7 +31,7 @@ class ProducerThread(threading.Thread):
         frame = self.vs.read()
         frame = frame if self.args.get("video", None) is None else frame[1]
         while frame is not None:
-            logging.debug(f"Adding Frame to queue {self.q.qsize()}")
+            # logging.debug(f"Adding Frame to queue {self.q.qsize()}")
             # While the queue has more than 10 frames in it, wait until we have less
             while self.q.qsize() > 15:
                 time.sleep(.2)
@@ -118,9 +118,6 @@ def draw_debug_text(frame):
     frame = cv2.putText(frame, 'Else, shift the cropped frame from the white dot towards the green dot.', (2, text_y), cv2.FONT_HERSHEY_DUPLEX, .5, (255,255,255), 1)
 
     return frame
-
-
-# def main(self.args):
 
 class ZoomedClipCreator:
     # This will persist for the entirety of this clip. The Init() should just prep the clip
@@ -437,6 +434,42 @@ class ZoomedClipCreator:
 
         # TODO Add code for "If something is out on BOTH sides, we need to zoom out"
 
+    def draw_scoreboard(self):
+        # TODO This needs to be a function
+        SCOREBOARD_WIDTH = 600
+        HALF_SCOREBOARD_WIDTH = SCOREBOARD_WIDTH // 2
+        SCORE_SECTION_WIDTH = HALF_SCOREBOARD_WIDTH // 6
+        SCOREBOARD_HEIGHT = 30
+        # Draw team one side
+        logging.debug("Draw scoreboard")
+        if self.team_one is not None:
+            # Team one is left-aligned, so we don't need any extra work
+            # Draw black rectangle for Dark score
+            # This is the inner-box, filled in
+            cv2.rectangle(self.cropped, (self.OUTPUT_SIZE[0]//2 - HALF_SCOREBOARD_WIDTH - 1, 0), (self.OUTPUT_SIZE[0]//2 - 1, SCOREBOARD_HEIGHT-2), self.team_one.bg_color, -1)
+            # This is the outer-box, just a thin line
+            cv2.rectangle(self.cropped, (self.OUTPUT_SIZE[0]//2 - HALF_SCOREBOARD_WIDTH - 1, 0), (self.OUTPUT_SIZE[0]//2 - 1, SCOREBOARD_HEIGHT-2), self.team_one.font_color, 1)
+            cv2.putText(self.cropped, self.team_one.name, (self.OUTPUT_SIZE[0]//2 - HALF_SCOREBOARD_WIDTH + 5, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_DUPLEX, 1, self.team_one.font_color, 1)
+            if self.team_one_score is not None:
+                # Draw a box to put the Score into
+                cv2.rectangle(self.cropped, (self.OUTPUT_SIZE[0]//2 - SCORE_SECTION_WIDTH - 1, 0), (self.OUTPUT_SIZE[0]//2 - 1, SCOREBOARD_HEIGHT-2), self.team_one.font_color, 1)
+                cv2.putText(self.cropped, str(self.team_one_score), (self.OUTPUT_SIZE[0]//2 - SCORE_SECTION_WIDTH + 5, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_DUPLEX, 1, self.team_one.font_color, 1)
+        # Draw team two side
+        if self.team_two is not None:
+            # Team two needs to be right-aligned
+            self.team_two_text_size = cv2.getTextSize(self.team_two.name, cv2.FONT_HERSHEY_DUPLEX, 1, 1)[0][0]
+            # print(self.team_two_text_size)
+            # Draw white rectangle for White score
+            # This is the inner-box, filled in
+            cv2.rectangle(self.cropped,(self.OUTPUT_SIZE[0]//2 + HALF_SCOREBOARD_WIDTH, 0), (self.OUTPUT_SIZE[0]//2 + 1, SCOREBOARD_HEIGHT-2), self.team_two.bg_color, -1)
+            # This is the outer-box, just a thin line
+            cv2.rectangle(self.cropped,(self.OUTPUT_SIZE[0]//2 + HALF_SCOREBOARD_WIDTH, 0), (self.OUTPUT_SIZE[0]//2 + 1, SCOREBOARD_HEIGHT-2), self.team_two.font_color, 1)
+            cv2.putText(self.cropped, self.team_two.name, (self.OUTPUT_SIZE[0]//2 + HALF_SCOREBOARD_WIDTH - self.team_two_text_size, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_DUPLEX, 1, self.team_two.font_color, 1)
+            if self.team_two_score is not None:
+                # Draw a box to put the Score into
+                cv2.rectangle(self.cropped,(self.OUTPUT_SIZE[0]//2 + SCORE_SECTION_WIDTH, 0), (self.OUTPUT_SIZE[0]//2 + 1, SCOREBOARD_HEIGHT-2), self.team_two.font_color, 1)
+                cv2.putText(self.cropped, str(self.team_two_score), (self.OUTPUT_SIZE[0]//2 + 5, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_DUPLEX, 1, self.team_two.font_color, 1)
+
     def process_video(self):
         self.process_start_time = datetime.datetime.now()
         # loop over the frames of the video
@@ -739,48 +772,19 @@ class ZoomedClipCreator:
                     self.frame = cv2.putText(self.frame, 'Cropped frame', (cropped_x1 // self.ZOOM_FACTOR, cropped_y1 // self.ZOOM_FACTOR - 5), cv2.FONT_HERSHEY_DUPLEX, .5, (255,0,0), 1)
 
                 # Cut down the size of the cropped box to what we actually want, rather than the full frame
+                # Up to this point, self.cropped was identical to the full frame
                 self.cropped = self.cropped[cropped_y1:cropped_y2, cropped_x1:cropped_x2]
+                # After cropping it, resize it to 1080p (or whatever output size was desired)
                 self.cropped = cv2.resize(self.cropped, (self.OUTPUT_SIZE[0], self.OUTPUT_SIZE[1]))
 
                 # Write the name of the clip at the top left
                 # Write a black outline, followed by the same text but in white and thinner
                 self.cropped = cv2.putText(self.cropped, self.FILENAME, (5, self.OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (0, 0, 0), 3)
                 self.cropped = cv2.putText(self.cropped, self.FILENAME, (5, self.OUTPUT_SIZE[1]//40), cv2.FONT_HERSHEY_DUPLEX, .5, (255, 255, 255), 1)
-                # if DRAW_SCOREBOARD
-                # TODO This needs to be a function
-                SCOREBOARD_WIDTH = 600
-                HALF_SCOREBOARD_WIDTH = SCOREBOARD_WIDTH // 2
-                SCORE_SECTION_WIDTH = HALF_SCOREBOARD_WIDTH // 6
-                SCOREBOARD_HEIGHT = 30
-                # Draw team one side
-                logging.debug("Draw scoreboard")
-                if self.team_one is not None:
-                    # Team one is left-aligned, so we don't need any extra work
-                    # Draw black rectangle for Dark score
-                    # This is the inner-box, filled in
-                    cv2.rectangle(self.cropped, (self.OUTPUT_SIZE[0]//2 - HALF_SCOREBOARD_WIDTH - 1, 0), (self.OUTPUT_SIZE[0]//2 - 1, SCOREBOARD_HEIGHT-2), self.team_one.bg_color, -1)
-                    # This is the outer-box, just a thin line
-                    cv2.rectangle(self.cropped, (self.OUTPUT_SIZE[0]//2 - HALF_SCOREBOARD_WIDTH - 1, 0), (self.OUTPUT_SIZE[0]//2 - 1, SCOREBOARD_HEIGHT-2), self.team_one.font_color, 1)
-                    cv2.putText(self.cropped, self.team_one.name, (self.OUTPUT_SIZE[0]//2 - HALF_SCOREBOARD_WIDTH + 5, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_DUPLEX, 1, self.team_one.font_color, 1)
-                    if self.team_one_score is not None:
-                        # Draw a box to put the Score into
-                        cv2.rectangle(self.cropped, (self.OUTPUT_SIZE[0]//2 - SCORE_SECTION_WIDTH - 1, 0), (self.OUTPUT_SIZE[0]//2 - 1, SCOREBOARD_HEIGHT-2), self.team_one.font_color, 1)
-                        cv2.putText(self.cropped, str(self.team_one_score), (self.OUTPUT_SIZE[0]//2 - SCORE_SECTION_WIDTH + 5, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_DUPLEX, 1, self.team_one.font_color, 1)
-                # Draw team two side
-                if self.team_two is not None:
-                    # Team two needs to be right-aligned
-                    self.team_two_text_size = cv2.getTextSize(self.team_two.name, cv2.FONT_HERSHEY_DUPLEX, 1, 1)[0][0]
-                    # print(self.team_two_text_size)
-                    # Draw white rectangle for White score
-                    # This is the inner-box, filled in
-                    cv2.rectangle(self.cropped,(self.OUTPUT_SIZE[0]//2 + HALF_SCOREBOARD_WIDTH, 0), (self.OUTPUT_SIZE[0]//2 + 1, SCOREBOARD_HEIGHT-2), self.team_two.bg_color, -1)
-                    # This is the outer-box, just a thin line
-                    cv2.rectangle(self.cropped,(self.OUTPUT_SIZE[0]//2 + HALF_SCOREBOARD_WIDTH, 0), (self.OUTPUT_SIZE[0]//2 + 1, SCOREBOARD_HEIGHT-2), self.team_two.font_color, 1)
-                    cv2.putText(self.cropped, self.team_two.name, (self.OUTPUT_SIZE[0]//2 + HALF_SCOREBOARD_WIDTH - self.team_two_text_size, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_DUPLEX, 1, self.team_two.font_color, 1)
-                    if self.team_two_score is not None:
-                        # Draw a box to put the Score into
-                        cv2.rectangle(self.cropped,(self.OUTPUT_SIZE[0]//2 + SCORE_SECTION_WIDTH, 0), (self.OUTPUT_SIZE[0]//2 + 1, SCOREBOARD_HEIGHT-2), self.team_two.font_color, 1)
-                        cv2.putText(self.cropped, str(self.team_two_score), (self.OUTPUT_SIZE[0]//2 + 5, SCOREBOARD_HEIGHT-4), cv2.FONT_HERSHEY_DUPLEX, 1, self.team_two.font_color, 1)
+
+                # draw_scoreboard uses self.cropped as an input, and modifies self.cropped in-place
+                self.draw_scoreboard()
+
                 # Write the current image to the video file
                 logging.debug(f"Write frame to disk")
                 if self.WRITE_VIDEO:
@@ -795,17 +799,14 @@ class ZoomedClipCreator:
 
                 self.old_center = self.new_center
         
-                
                 # frame = np.bitwise_or(frame, canny[:, :, np.newaxis])
-
-                
                 # canny = cv2.Canny(masked_image, 100, 200)
                 # cv2.imshow("Canny", canny)
 
                 # if self.SHOW_DEBUG:
-                # Green overlay disabled for now
+                # Green overlay disabled for now, it takes too long to produce
                 if False: # DEBUG:
-                    print(f"Generate green overlay")
+                    logging.debug(f"Generate green overlay")
                     # Draw the threshold over top of the live frame
                     frame = np.bitwise_or(frame, thresh[:, :, np.newaxis])
                     # We'd rather this be AFTER the overlay, but it's more complex now that the frame is decimal instead of int
@@ -819,9 +820,8 @@ class ZoomedClipCreator:
                     frame *= 255.0
                     frame = np.array(frame, dtype=np.uint8)
                 else:  
-                    # Draw polygon of the Masked-Area. This is NOT accurate, it does not include the Exclusion zones
+                    # Draw polygon of the Masked-Area. This is NOT 100% accurate, it does not include the Exclusion zones
                     cv2.polylines(self.frame, self.roi_corners, True, (0, 0, 255), 2)
-
 
                 if self.SHOW_DEBUG:
                     logging.debug(f"Draw debug rectangles over everything")
@@ -871,7 +871,7 @@ class ZoomedClipCreator:
                 # cv2.imshow("Thresh", thresh)
                 # cv2.imshow("Frame Delta", frameDelta)
             key = cv2.waitKey(1) & 0xFF
-            # if the `q` key is pressed, break from the lop
+            # if the `q` key is pressed, break from the loop
             if key == ord("q"):
                 break
             self.count += 1

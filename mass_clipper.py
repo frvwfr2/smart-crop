@@ -34,6 +34,7 @@ def generate_clips(video_path, input_file, output_dir=None, base_output_prefix="
     end_string = None
     args = ""
 
+    # Parse the timestamps file and produce a list of timestamps we care about. That list is timecodes
     with open(input_file) as f:
         count = 0
         for line in f.readlines():
@@ -132,6 +133,8 @@ def generate_clips(video_path, input_file, output_dir=None, base_output_prefix="
     #     # print(clip)
 
     for clip in clips:
+        # Do some mumbo-jumbo to cut the clips faster. 
+        # Basically, if we want something 45 minutes in, do a fast-forward to 44m50s, and then do a slow-forward for the next 10 secs. Saves a ton of time
         if clip.start > 10:
             skip_secs = clip.start - 10
             clip_start = 10

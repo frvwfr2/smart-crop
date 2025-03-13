@@ -128,17 +128,18 @@ with open(f"{directory}\post_{args['base_output_prefix']}_files.txt", 'w') as f:
             print("Zoom step was not performed")
             continue
         print("fixing audio")
-        final_file = fix_audio(video_file=f"{directory}\zoomed_{clip.name}", audio_file=f'{directory}\{clip.name}')
+        # Get the final file out. We have to re-encode it before being usable however.
+        fixed_audio_file = fix_audio(video_file=f"{directory}\zoomed_{clip.name}", audio_file=f'{directory}\{clip.name}')
 
         # Re-encode the file
-        command = f'ffmpeg -i "{final_file}" -loglevel fatal -hide_banner -s hd1080 -r 30000/1001 -video_track_timescale 30k -c:a copy -y "{final_file}_reencode.mp4"'
+        command = f'ffmpeg -i "{fixed_audio_file}" -loglevel fatal -hide_banner -s hd1080 -r 30000/1001 -video_track_timescale 30k -c:a copy -y "{fixed_audio_file}_reencode.mp4"'
         print(command)
         subprocess.call(command)
 
         # delete the two component files for the audio + video, that have since been re-encoded
         os.remove(f"{directory}\zoomed_{clip.name}")
         # os.remove(f'{directory}\{clip.name}')
-        os.remove(f"{final_file}")
+        os.remove(f"{fixed_audio_file}")
         # Write the filename to the mergelist
         # sys.exit()
         # pass
